@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44">
+  <!-- Template icon: solid black on transparent for macOS menu bar -->
+  <!-- Outer ring -->
+  <circle cx="22" cy="22" r="18" fill="none" stroke="black" stroke-width="2" opacity="0.6"/>
+  <!-- Inner ring -->
+  <circle cx="22" cy="22" r="12" fill="none" stroke="black" stroke-width="2.5" opacity="0.8"/>
+  <!-- Core -->
+  <circle cx="22" cy="22" r="6" fill="black" opacity="0.9"/>
+  <!-- J -->
+  <text x="22" y="27" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="12" fill="white">J</text>
+  <!-- Top/bottom lines -->
+  <line x1="22" y1="4" x2="22" y2="10" stroke="black" stroke-width="1.5" opacity="0.5"/>
+  <line x1="22" y1="34" x2="22" y2="40" stroke="black" stroke-width="1.5" opacity="0.5"/>
+  <line x1="4" y1="22" x2="10" y2="22" stroke="black" stroke-width="1.5" opacity="0.5"/>
+  <line x1="34" y1="22" x2="40" y2="22" stroke="black" stroke-width="1.5" opacity="0.5"/>
+</svg>

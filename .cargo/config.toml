@@ -1,0 +1,9 @@
+[build]
+# Build on internal drive to avoid macOS AppleDouble (._*) files
+# that break Tauri's build script on external SSDs.
+# Falls back to default if /tmp is not available.
+target-dir = "/tmp/jarvis-target"
+
+[env]
+# Prevent macOS from creating AppleDouble files during builds
+COPYFILE_DISABLE = "1"

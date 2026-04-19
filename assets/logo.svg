@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00d4ff" stop-opacity="0.9"/>
+      <stop offset="60%" stop-color="#00d4ff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" fill="#0a0a0f"/>
+  <!-- Outer ring -->
+  <circle cx="512" cy="512" r="420" fill="none" stroke="#00d4ff" stroke-width="6" opacity="0.2" filter="url(#glow)"/>
+  <!-- Middle ring -->
+  <circle cx="512" cy="512" r="320" fill="none" stroke="#00d4ff" stroke-width="3" opacity="0.35"/>
+  <!-- Inner ring (arc reactor) -->
+  <circle cx="512" cy="512" r="220" fill="none" stroke="#00d4ff" stroke-width="10" opacity="0.7" filter="url(#glow)"/>
+  <!-- Core glow -->
+  <circle cx="512" cy="512" r="140" fill="url(#coreGlow)"/>
+  <!-- Radial segments (8 lines) -->
+  <g stroke="#00d4ff" stroke-width="3" opacity="0.4">
+    <line x1="512" y1="292" x2="512" y2="120"/>
+    <line x1="512" y1="732" x2="512" y2="904"/>
+    <line x1="292" y1="512" x2="120" y2="512"/>
+    <line x1="732" y1="512" x2="904" y2="512"/>
+    <line x1="357" y1="357" x2="217" y2="217"/>
+    <line x1="667" y1="667" x2="807" y2="807"/>
+    <line x1="667" y1="357" x2="807" y2="217"/>
+    <line x1="357" y1="667" x2="217" y2="807"/>
+  </g>
+  <!-- Segment dots on inner ring -->
+  <g fill="#00d4ff" opacity="0.6">
+    <circle cx="512" cy="292" r="8"/>
+    <circle cx="512" cy="732" r="8"/>
+    <circle cx="292" cy="512" r="8"/>
+    <circle cx="732" cy="512" r="8"/>
+    <circle cx="357" cy="357" r="8"/>
+    <circle cx="667" cy="667" r="8"/>
+    <circle cx="667" cy="357" r="8"/>
+    <circle cx="357" cy="667" r="8"/>
+  </g>
+  <!-- Central J -->
+  <text x="512" y="598" text-anchor="middle" font-family="'SF Mono', 'Menlo', 'Monaco', monospace" font-weight="700" font-size="280" fill="#0a0a0f" letter-spacing="-10">J</text>
+  <!-- J highlight -->
+  <text x="512" y="598" text-anchor="middle" font-family="'SF Mono', 'Menlo', 'Monaco', monospace" font-weight="700" font-size="280" fill="none" stroke="#00ff88" stroke-width="2" opacity="0.5" letter-spacing="-10">J</text>
+</svg>

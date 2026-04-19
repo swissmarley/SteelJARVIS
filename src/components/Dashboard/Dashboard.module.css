@@ -1,0 +1,247 @@
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-surface);
+  overflow-y: auto;
+  padding: var(--space-sm);
+}
+
+.title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-xs);
+}
+
+.panel {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.panelHeader:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.panelArrow {
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+}
+
+.panelLabel {
+  flex: 1;
+  text-align: left;
+}
+
+.panelBody {
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  animation: fadeIn 0.15s ease;
+}
+
+.statusGrid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.statusLabel {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.statusValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.taskItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+
+.taskDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.taskDot.pending { background: var(--text-muted); }
+.taskDot.in_progress { background: var(--accent-primary); animation: pulse 1.5s infinite; }
+.taskDot.completed { background: var(--color-success); }
+.taskDot.blocked { background: var(--color-warning); }
+.taskDot.failed { background: var(--color-error); }
+
+.taskDesc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timelineItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.timelineTime {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 60px;
+}
+
+.timelineType {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineDesc {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 2px 0;
+}
+
+.toolStatus {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.toolStatus.available { background: var(--color-success); }
+.toolStatus.running { background: var(--accent-primary); animation: pulse 1s infinite; }
+.toolStatus.error { background: var(--color-error); }
+
+.toolName {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memoryEvent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 2px 0;
+}
+
+.memoryType {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  width: 50px;
+}
+
+.memoryPreview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permItem {
+  padding: var(--space-xs) 0;
+}
+
+.permAction {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-warning);
+  display: block;
+}
+
+.permDetails {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.errorItem {
+  padding: var(--space-xs) 0;
+}
+
+.errorSource {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-error);
+}
+
+.errorMessage {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+}
+
+.healthGrid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.healthDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
