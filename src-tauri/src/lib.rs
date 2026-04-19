@@ -122,6 +122,7 @@ pub fn run() {
             commands::voice::stop_clap_detection,
             commands::voice::start_listening,
             commands::voice::stop_listening,
+            commands::voice::log_debug,
             commands::search::web_search,
         ])
         .run(tauri::generate_context!())

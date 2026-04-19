@@ -50,7 +50,7 @@ export const useVoiceStore = create<VoiceState & VoiceActions>()(
     clapEnabled: false,
     clapSensitivity: 5,
     activationMethod: 'hotkey',
-    voiceEnabled: false,
+    voiceEnabled: true,
     partialTranscript: '',
 
     speak: async (text) => {

@@ -27,6 +27,11 @@ pub enum JarvisEvent {
     SttError { message: String },
     Error { source: String, message: String },
     ProviderStatusChanged { provider: String, status: String },
+    // Full voice round-trip: user said X, JARVIS answered Y. Emitted after the
+    // backend handles the recognised speech end-to-end (agent + TTS) so the
+    // frontend only has to render the transcript.
+    VoiceAgentResponse { user_text: String, assistant_text: String },
+    VoiceAgentError { user_text: String, message: String },
 }
 
 impl JarvisEvent {
@@ -53,6 +58,8 @@ impl JarvisEvent {
             Self::SttError { .. } => "stt-error",
             Self::Error { .. } => "error",
             Self::ProviderStatusChanged { .. } => "system-health",
+            Self::VoiceAgentResponse { .. } => "voice-agent-response",
+            Self::VoiceAgentError { .. } => "voice-agent-error",
         }
     }
 
@@ -79,6 +86,8 @@ impl JarvisEvent {
             Self::SttError { message } => serde_json::json!({"message": message}),
             Self::Error { source, message } => serde_json::json!({"source": source, "message": message}),
             Self::ProviderStatusChanged { provider, status } => serde_json::json!({"provider": provider, "status": status}),
+            Self::VoiceAgentResponse { user_text, assistant_text } => serde_json::json!({"userText": user_text, "assistantText": assistant_text}),
+            Self::VoiceAgentError { user_text, message } => serde_json::json!({"userText": user_text, "message": message}),
         }
     }
 }

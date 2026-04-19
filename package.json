@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "cargo tauri",
-    "tauri:dev": "cargo tauri dev",
-    "tauri:build": "cargo tauri build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/"
   },

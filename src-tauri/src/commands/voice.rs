@@ -4,6 +4,13 @@ use tauri::State;
 use crate::observability::{EventBus, JarvisEvent};
 use crate::voice::{SpeechManager, ClapDetector, ActivationManager, AudioCapture, SpeechRecognizer};
 
+/// Lightweight bridge so the frontend can write to the dev server stderr.
+/// Lets us trace UI-side flow without asking the user to open devtools.
+#[tauri::command]
+pub fn log_debug(tag: String, message: String) {
+    eprintln!("[UI:{}] {}", tag, message);
+}
+
 #[tauri::command]
 pub fn speak(
     text: String,
@@ -113,13 +120,11 @@ pub fn stop_clap_detection(
 #[tauri::command]
 pub fn start_listening(
     stt: State<'_, Mutex<SpeechRecognizer>>,
-    event_bus: State<'_, Arc<Mutex<EventBus>>>,
 ) -> Result<(), String> {
-    // Emit a test event to verify the speech-partial channel works
-    {
-        let bus = event_bus.lock().map_err(|e| e.to_string())?;
-        bus.emit(JarvisEvent::SpeechPartial { text: "[listening started]".to_string() });
-    }
+    // CPAL (clap detection) and AVAudioEngine (STT) can share the default
+    // input device on macOS — both just tap the node concurrently. Keeping
+    // CPAL running means clap detection stays alive during speech capture.
+    eprintln!("[Voice] start_listening invoked");
     let mut stt = stt.lock().map_err(|e| e.to_string())?;
     stt.start()
 }
@@ -128,6 +133,7 @@ pub fn start_listening(
 pub fn stop_listening(
     stt: State<'_, Mutex<SpeechRecognizer>>,
 ) -> Result<(), String> {
+    eprintln!("[Voice] stop_listening invoked");
     let mut stt = stt.lock().map_err(|e| e.to_string())?;
     stt.stop()
 }

@@ -69,15 +69,30 @@ impl AudioCapture {
         let event_app = app_handle.clone();
         thread::spawn(move || {
             while let Ok(confidence) = rx.recv() {
+                eprintln!("[Clap] detected, confidence={:.2}", confidence);
                 if let Ok(bus) = event_bus.lock() {
                     bus.emit(JarvisEvent::ClapDetected { confidence });
                     bus.emit(JarvisEvent::ActivationTriggered { source: "clap".to_string() });
                     bus.emit(JarvisEvent::VoiceStateChanged { state: "listening".to_string() });
                 }
-                // Show and focus window on clap
-                if let Some(window) = event_app.get_webview_window("main") {
+                // Wake every window from the background. The config has no
+                // explicit label so we don't rely on "main" — iterate webview
+                // windows and raise each. macOS needs unminimize+show+focus
+                // together, plus a brief always-on-top flicker, to reliably
+                // bring the app forward when another app is frontmost.
+                let windows = event_app.webview_windows();
+                eprintln!("[Clap] waking {} window(s)", windows.len());
+                for (label, window) in windows {
+                    eprintln!("[Clap] raising window '{}'", label);
+                    let _ = window.unminimize();
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let _ = window.set_always_on_top(true);
+                    let w = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        let _ = w.set_always_on_top(false);
+                    });
                 }
             }
         });
@@ -147,6 +162,7 @@ impl AudioCapture {
         state.stream = Some(stream);
         state.active = true;
 
+        eprintln!("[Clap] CPAL input stream started, clap detection active");
         Ok(())
     }
 

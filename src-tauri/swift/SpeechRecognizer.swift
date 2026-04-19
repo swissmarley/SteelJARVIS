@@ -18,6 +18,12 @@ public class NativeSpeechRecognizer: NSObject, SFSpeechRecognizerDelegate {
     private var onResult: ResultCallback?
     private var onError: ErrorCallback?
     private var isListening: Bool = false
+    // Silence detector: SFSpeechRecognizer emits partials continuously but only
+    // fires isFinal=true when the input stream ends. We force it by calling
+    // endAudio() after `silenceThreshold` seconds of unchanged transcription.
+    private var lastRecognizedText: String = ""
+    private var silenceTimer: Timer?
+    private let silenceThreshold: TimeInterval = 1.2
 
     public override init() {
         super.init()
@@ -119,9 +125,13 @@ public class NativeSpeechRecognizer: NSObject, SFSpeechRecognizerDelegate {
                     self.onResult?(ptr, isFinal)
                 }
 
-                // If final, restart listening for continuous conversation
                 if isFinal {
+                    self.cancelSilenceTimer()
+                    self.lastRecognizedText = ""
                     self.restartListening()
+                } else if !transcription.isEmpty && transcription != self.lastRecognizedText {
+                    self.lastRecognizedText = transcription
+                    self.scheduleSilenceTimer()
                 }
             }
         }
@@ -143,9 +153,37 @@ public class NativeSpeechRecognizer: NSObject, SFSpeechRecognizerDelegate {
         }
     }
 
+    private func scheduleSilenceTimer() {
+        // Recognition callback runs on a background queue without its own run loop,
+        // so Timer.scheduledTimer there would never fire. Hop to main, which has
+        // the default run loop, before installing the timer.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.silenceTimer?.invalidate()
+            let timer = Timer.scheduledTimer(withTimeInterval: self.silenceThreshold, repeats: false) { [weak self] _ in
+                guard let self = self, self.isListening else { return }
+                // endAudio() forces SFSpeechRecognizer to flush isFinal=true on
+                // the next callback, which cascades into restartListening().
+                self.recognitionRequest?.endAudio()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.silenceTimer = timer
+        }
+    }
+
+    private func cancelSilenceTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.silenceTimer?.invalidate()
+            self?.silenceTimer = nil
+        }
+    }
+
     private func restartListening() {
         // Clean up current recognition but keep listening
         guard isListening else { return }
+
+        cancelSilenceTimer()
+        lastRecognizedText = ""
 
         if let audioEngine = audioEngine {
             audioEngine.inputNode.removeTap(onBus: 0)
@@ -172,6 +210,9 @@ public class NativeSpeechRecognizer: NSObject, SFSpeechRecognizerDelegate {
     }
 
     private func stopRecognition() {
+        cancelSilenceTimer()
+        lastRecognizedText = ""
+
         if let audioEngine = audioEngine {
             audioEngine.inputNode.removeTap(onBus: 0)
             audioEngine.stop()
@@ -186,6 +227,8 @@ public class NativeSpeechRecognizer: NSObject, SFSpeechRecognizerDelegate {
 
     private func cleanup() {
         isListening = false
+        cancelSilenceTimer()
+        lastRecognizedText = ""
         audioEngine = nil
         recognitionRequest = nil
         recognitionTask = nil

@@ -11,16 +11,27 @@ pub async fn send_message(
     engine: State<'_, Mutex<AgentEngine>>,
     event_bus: State<'_, Arc<Mutex<EventBus>>>,
 ) -> Result<String, String> {
+    eprintln!("[Chat] send_message invoked, text={:?}", message);
     let (api_key, history) = {
         let e = engine.lock().map_err(|e| e.to_string())?;
         (e.api_key().to_string(), e.history().to_vec())
     };
 
+    if api_key.is_empty() {
+        eprintln!("[Chat] ERROR: ANTHROPIC_API_KEY is not configured");
+        return Err("ANTHROPIC_API_KEY is not configured. Add it to .env or the environment and restart.".to_string());
+    }
+    eprintln!("[Chat] api_key len={}, history len={}", api_key.len(), history.len());
+
     let bus = event_bus.lock().map_err(|e| e.to_string())?.clone();
 
-    let (response, new_messages) = AgentEngine::send_with(&api_key, &history, &message, &bus).await?;
+    let result = AgentEngine::send_with(&api_key, &history, &message, &bus).await;
+    match &result {
+        Ok((response, _)) => eprintln!("[Chat] agent response ({} chars)", response.len()),
+        Err(e) => eprintln!("[Chat] agent error: {}", e),
+    }
+    let (response, new_messages) = result?;
 
-    // Update engine history with the full conversation
     {
         let mut e = engine.lock().map_err(|e| e.to_string())?;
         e.set_history(new_messages);

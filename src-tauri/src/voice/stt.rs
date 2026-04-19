@@ -2,9 +2,11 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
+use crate::agent::AgentEngine;
 use crate::observability::{EventBus, JarvisEvent};
+use crate::voice::SpeechManager;
 
 // FFI declarations for Swift SpeechRecognizer
 extern "C" {
@@ -120,22 +122,44 @@ impl SpeechRecognizer {
             }
         }
 
-        // Spawn event-emitting thread (same pattern as clap detection)
+        // Spawn event-emitting thread. On Final we drive the agent directly from
+        // the backend — the frontend no longer has to dispatch; it only renders
+        // the resulting transcript via the voice-agent-response event.
         let event_bus = self.event_bus.clone();
-        let _event_app = self.app_handle.clone();
+        let event_app = self.app_handle.clone();
         thread::spawn(move || {
             while let Ok(event) = rx.recv() {
-                if let Ok(bus) = event_bus.lock() {
-                    match event {
-                        SpeechEvent::Partial { text } => {
+                match event {
+                    SpeechEvent::Partial { text } => {
+                        // Barge-in: if we're mid-TTS and the partial looks
+                        // like fresh user speech (not JARVIS's own voice
+                        // echoing back), kill TTS so the user's next utterance
+                        // gets the floor. We require ≥3 words so random 1-word
+                        // mis-transcriptions never cut JARVIS off.
+                        let trimmed = text.trim();
+                        let word_count = trimmed.split_whitespace().count();
+                        if word_count >= 3 {
+                            if let Ok(speech) = event_app.state::<Mutex<SpeechManager>>().lock() {
+                                if speech.is_speaking() && !speech.is_echo_of_current(trimmed) {
+                                    eprintln!("[STT] barge-in: user interrupted TTS with {:?}", trimmed);
+                                    let _ = speech.stop_speaking();
+                                }
+                            }
+                        }
+                        if let Ok(bus) = event_bus.lock() {
                             eprintln!("[STT] event thread: emitting SpeechPartial");
                             bus.emit(JarvisEvent::SpeechPartial { text });
                         }
-                        SpeechEvent::Final { text } => {
+                    }
+                    SpeechEvent::Final { text } => {
+                        if let Ok(bus) = event_bus.lock() {
                             eprintln!("[STT] event thread: emitting SpeechRecognized");
-                            bus.emit(JarvisEvent::SpeechRecognized { text, is_final: true });
+                            bus.emit(JarvisEvent::SpeechRecognized { text: text.clone(), is_final: true });
                         }
-                        SpeechEvent::Error { message } => {
+                        dispatch_to_agent(event_app.clone(), event_bus.clone(), text);
+                    }
+                    SpeechEvent::Error { message } => {
+                        if let Ok(bus) = event_bus.lock() {
                             eprintln!("[STT] event thread: emitting SttError");
                             bus.emit(JarvisEvent::SttError { message });
                         }
@@ -197,4 +221,84 @@ impl Drop for SpeechRecognizer {
             }
         }
     }
+}
+
+/// Runs the recognised utterance through the agent and announces the response
+/// via TTS. Emits `voice-agent-response` (or `voice-agent-error`) when done.
+/// Invoked from the STT event thread on `is_final=true`.
+fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text: String) {
+    let trimmed = user_text.trim().to_string();
+    if trimmed.is_empty() {
+        eprintln!("[STT→Agent] empty utterance, skipping");
+        return;
+    }
+    eprintln!("[STT→Agent] dispatching {:?} to agent", trimmed);
+
+    tauri::async_runtime::spawn(async move {
+        let (api_key, history) = {
+            let engine_state = app.state::<Mutex<AgentEngine>>();
+            let engine = match engine_state.lock() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("[STT→Agent] AgentEngine lock failed: {}", e);
+                    return;
+                }
+            };
+            (engine.api_key().to_string(), engine.history().to_vec())
+        };
+
+        if api_key.is_empty() {
+            eprintln!("[STT→Agent] ERROR: ANTHROPIC_API_KEY is empty");
+            if let Ok(bus) = event_bus.lock() {
+                bus.emit(JarvisEvent::VoiceAgentError {
+                    user_text: trimmed.clone(),
+                    message: "ANTHROPIC_API_KEY is not configured. Add it to .env and restart.".to_string(),
+                });
+            }
+            return;
+        }
+
+        let bus_snapshot = match event_bus.lock() {
+            Ok(b) => b.clone(),
+            Err(e) => {
+                eprintln!("[STT→Agent] EventBus lock failed: {}", e);
+                return;
+            }
+        };
+
+        let result = AgentEngine::send_with(&api_key, &history, &trimmed, &bus_snapshot).await;
+
+        match result {
+            Ok((response, new_history)) => {
+                eprintln!("[STT→Agent] agent replied ({} chars)", response.len());
+
+                if let Ok(mut engine) = app.state::<Mutex<AgentEngine>>().lock() {
+                    engine.set_history(new_history);
+                }
+
+                if let Ok(bus) = event_bus.lock() {
+                    bus.emit(JarvisEvent::VoiceAgentResponse {
+                        user_text: trimmed.clone(),
+                        assistant_text: response.clone(),
+                    });
+                }
+
+                // Speak the response so JARVIS answers even if the UI is hidden.
+                if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
+                    if let Err(e) = speech.speak_async(&response) {
+                        eprintln!("[STT→Agent] TTS failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[STT→Agent] agent error: {}", e);
+                if let Ok(bus) = event_bus.lock() {
+                    bus.emit(JarvisEvent::VoiceAgentError {
+                        user_text: trimmed.clone(),
+                        message: e,
+                    });
+                }
+            }
+        }
+    });
 }

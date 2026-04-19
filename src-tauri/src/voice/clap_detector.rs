@@ -165,9 +165,21 @@ impl ClapDetector {
         let base_threshold = self.config.energy_threshold();
         let dynamic_threshold = state.energy_avg * (1.0 + base_threshold * 10.0);
 
+        // Periodic heartbeat so we can confirm audio is flowing end-to-end.
+        if state.samples_processed % 200 == 0 {
+            eprintln!(
+                "[Clap] audio heartbeat: energy={:.4}, avg={:.4}, thresh={:.4}",
+                energy, state.energy_avg, dynamic_threshold
+            );
+        }
+
         // Detect transient (energy spike above threshold)
         if energy > dynamic_threshold {
             let now = Instant::now();
+            eprintln!(
+                "[Clap] transient: energy={:.4} > thresh={:.4}",
+                energy, dynamic_threshold
+            );
 
             // Check cooldown since last activation
             if let Some(last_act) = state.last_activation {

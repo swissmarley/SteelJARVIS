@@ -6,7 +6,12 @@ import { useVoiceStore } from './stores/voice';
 import { useTauriEvent } from './hooks/useTauriEvent';
 import AppShell from './components/AppShell/AppShell';
 
-const SPEECH_DEBOUNCE_MS = 2000;
+// Pipes UI-side events to the Rust stderr so the user can trace behaviour in
+// the same terminal as the `[Chat]`/`[STT]` logs without opening devtools.
+const uiLog = (tag: string, message: string) => {
+  console.log(`[${tag}] ${message}`);
+  invoke('log_debug', { tag, message }).catch(() => { /* ignore */ });
+};
 
 export default function App() {
   const addMessage = useConversationStore((s) => s.addMessage);
@@ -120,116 +125,145 @@ export default function App() {
   // Clap detected: auto-start speech recognition
   const handleClapDetected = useCallback(
     (payload: { confidence: number }) => {
-      console.log('[STT] clap-detected, starting listening');
+      uiLog('Clap', `clap-detected, starting listening (conf=${payload.confidence.toFixed(2)})`);
       addActionEvent({
         id: crypto.randomUUID(),
         type: 'ClapDetected',
         description: `Clap detected (confidence: ${payload.confidence.toFixed(2)})`,
         timestamp: Date.now(),
       });
-      // Auto-start listening when clap is detected
+      // Auto-start listening when JARVIS appears so the user can speak immediately.
       useVoiceStore.getState().startListening();
     },
     [addActionEvent]
   );
 
-  // Debounce timer for auto-sending when partial results stop
+  // The backend now owns the speech→agent lifecycle. These refs are only here
+  // so existing handlers can clear any timers left over from earlier paths.
   const speechDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const speechMaxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Send a voice message to the agent
-  const sendVoiceMessage = useCallback(
-    (text: string) => {
-      if (!text.trim()) return;
-      // Clear debounce timer
-      if (speechDebounceRef.current) {
-        clearTimeout(speechDebounceRef.current);
-        speechDebounceRef.current = null;
-      }
-      // Stop listening while agent processes
-      useVoiceStore.getState().stopListening();
+  const clearSpeechTimers = () => {
+    if (speechDebounceRef.current) {
+      clearTimeout(speechDebounceRef.current);
+      speechDebounceRef.current = null;
+    }
+    if (speechMaxTimerRef.current) {
+      clearTimeout(speechMaxTimerRef.current);
+      speechMaxTimerRef.current = null;
+    }
+  };
 
-      const userMessage = {
-        id: crypto.randomUUID(),
-        role: 'user' as const,
-        content: text.trim(),
-        timestamp: Date.now(),
-      };
-      addMessage(userMessage);
-      setStreaming(true);
-      setExecutionMode('acting');
-
-      invoke<string>('send_message', { message: text.trim() })
-        .then((response) => {
-          addMessage({
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: response,
-            timestamp: Date.now(),
-          });
-          if (useVoiceStore.getState().voiceEnabled) {
-            useVoiceStore.getState().speak(response);
-            const duration = Math.max(1000, response.length * 60);
-            setTimeout(() => {
-              useVoiceStore.getState().startListening();
-            }, duration + 500);
-          }
-        })
-        .catch((err) => {
-          setError(String(err));
-          addMessage({
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: `I encountered an error: ${err}. Please check your API key configuration.`,
-            timestamp: Date.now(),
-          });
-        })
-        .finally(() => {
-          setStreaming(false);
-          setExecutionMode('idle');
-        });
-    },
-    [addMessage, setStreaming, setError, setExecutionMode]
-  );
-
-  // Speech recognized (final result): cancel debounce and send immediately
+  // Speech recognized (final): clear any pending UI timers. The backend now
+  // runs the full STT→agent→TTS loop and will emit voice-agent-response; we
+  // no longer dispatch send_message from here.
   const handleSpeechRecognized = useCallback(
     (payload: { text: string; is_final: boolean }) => {
-      console.log('[STT] speech-recognized event:', payload);
-      if (payload.is_final && payload.text.trim()) {
-        sendVoiceMessage(payload.text);
+      uiLog('STT', `speech-recognized: is_final=${payload.is_final}, text=${JSON.stringify(payload.text)}`);
+      if (payload.is_final) {
+        clearSpeechTimers();
+        setStreaming(true);
+        setExecutionMode('acting');
       }
     },
-    [sendVoiceMessage]
+    [setStreaming, setExecutionMode]
   );
 
-  // Partial speech result: update transcript and reset debounce timer.
-  // If no new partial arrives within SPEECH_DEBOUNCE_MS, auto-send.
+  // Partial speech result: just update the live transcript preview. The
+  // backend drives finalization via the Swift silence timer → is_final event,
+  // so no frontend debounce is required.
   const handleSpeechPartial = useCallback(
     (payload: { text: string }) => {
-      console.log('[STT] speech-partial event:', payload);
-      useVoiceStore.getState().setPartialTranscript(payload.text);
-
-      if (speechDebounceRef.current) {
-        clearTimeout(speechDebounceRef.current);
-      }
-      speechDebounceRef.current = setTimeout(() => {
-        const text = useVoiceStore.getState().partialTranscript;
-        if (text.trim()) {
-          sendVoiceMessage(text);
-        }
-      }, SPEECH_DEBOUNCE_MS);
+      uiLog('STT', `speech-partial: ${JSON.stringify(payload.text)}`);
+      const text = (payload.text ?? '').trim();
+      if (!text || text.startsWith('[')) return;
+      useVoiceStore.getState().setPartialTranscript(text);
     },
-    [sendVoiceMessage]
+    []
   );
 
-  // STT error
+  // STT error — surface it, then stop listening so CPAL/clap detection resumes.
   const handleSttError = useCallback(
     (payload: { message: string }) => {
-      console.log('[STT] stt-error event:', payload);
+      uiLog('STT', `stt-error: ${payload.message}`);
       addError('stt', payload.message);
       useVoiceStore.getState().setSttError(payload.message);
+      clearSpeechTimers();
+      useVoiceStore.getState().stopListening();
     },
     [addError]
+  );
+
+  // Backend-driven voice round-trip: Rust ran STT→agent→TTS and is handing us
+  // the transcript to render. No invoke/send_message call needed here.
+  const handleVoiceAgentResponse = useCallback(
+    (payload: { userText: string; assistantText: string }) => {
+      uiLog('Voice', `voice-agent-response: user=${JSON.stringify(payload.userText)}, assistant len=${payload.assistantText.length}`);
+      clearSpeechTimers();
+      // Keep STT running so the user can follow up (or barge-in) without
+      // having to clap / toggle listen again. The backend recognizer loops
+      // automatically after each final.
+      useVoiceStore.getState().setPartialTranscript('');
+      const now = Date.now();
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: payload.userText,
+        timestamp: now,
+      });
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: payload.assistantText,
+        timestamp: now,
+      });
+      addActionEvent({
+        id: crypto.randomUUID(),
+        type: 'UserSaid',
+        description: payload.userText,
+        timestamp: now,
+      });
+      addActionEvent({
+        id: crypto.randomUUID(),
+        type: 'JarvisSaid',
+        description: payload.assistantText.slice(0, 160),
+        timestamp: now,
+      });
+      setStreaming(false);
+      setExecutionMode('idle');
+    },
+    [addMessage, addActionEvent, setStreaming, setExecutionMode]
+  );
+
+  const handleVoiceAgentError = useCallback(
+    (payload: { userText: string; message: string }) => {
+      uiLog('Voice', `voice-agent-error: ${payload.message}`);
+      clearSpeechTimers();
+      useVoiceStore.getState().setPartialTranscript('');
+      const now = Date.now();
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: payload.userText,
+        timestamp: now,
+      });
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `I encountered an error: ${payload.message}`,
+        timestamp: now,
+      });
+      addActionEvent({
+        id: crypto.randomUUID(),
+        type: 'UserSaid',
+        description: payload.userText,
+        timestamp: now,
+      });
+      addError('agent', payload.message);
+      setStreaming(false);
+      setExecutionMode('idle');
+    },
+    [addMessage, addActionEvent, addError, setStreaming, setExecutionMode]
   );
 
   useTauriEvent('state-changed', handleStateChanged);
@@ -244,6 +278,8 @@ export default function App() {
   useTauriEvent('speech-recognized', handleSpeechRecognized);
   useTauriEvent('speech-partial', handleSpeechPartial);
   useTauriEvent('stt-error', handleSttError);
+  useTauriEvent('voice-agent-response', handleVoiceAgentResponse);
+  useTauriEvent('voice-agent-error', handleVoiceAgentError);
 
   useTauriEvent('toggle-clap-from-tray', useCallback(() => {
     const { isListening, startClapDetection, stopClapDetection } = useVoiceStore.getState();
@@ -262,6 +298,15 @@ export default function App() {
   useEffect(() => {
     setExecutionMode('idle');
 
+    // Delay auto-starting clap detection so the window is fully mounted and any
+    // first-run macOS microphone permission prompt has a chance to resolve
+    // before CPAL tries to open the input device.
+    const clapBootTimer = setTimeout(() => {
+      useVoiceStore.getState().startClapDetection().catch((err) => {
+        console.warn('[Voice] auto-start clap detection failed:', err);
+      });
+    }, 1500);
+
     invoke('check_health')
       .then((health: any) => {
         updateSystemHealth(health);
@@ -269,6 +314,8 @@ export default function App() {
       .catch(() => {
         updateSystemHealth({ providerConnected: false, dbConnected: false, audioAvailable: false });
       });
+
+    return () => clearTimeout(clapBootTimer);
   }, []);
 
   return <AppShell />;
