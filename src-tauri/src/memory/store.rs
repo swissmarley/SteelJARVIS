@@ -316,26 +316,30 @@ impl MemoryStore {
              WHERE embedding IS NOT NULL",
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            let entry = MemoryEntry {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                category: row.get(2)?,
-                confidence: row.get(3)?,
-                source: row.get(4)?,
-                privacy_label: row.get(5)?,
-                pinned: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                access_count: row.get(9)?,
-            };
-            let emb_bytes: Vec<u8> = row.get(10)?;
-            Ok((entry, emb_bytes))
-        })?;
+        let rows: Vec<(MemoryEntry, Vec<u8>)> = stmt
+            .query_map([], |row| {
+                let entry = MemoryEntry {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                    category: row.get(2)?,
+                    confidence: row.get(3)?,
+                    source: row.get(4)?,
+                    privacy_label: row.get(5)?,
+                    pinned: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                    access_count: row.get(9)?,
+                };
+                let emb_bytes: Vec<u8> = row.get(10)?;
+                Ok((entry, emb_bytes))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
 
         let mut scored: Vec<(MemoryEntry, f32)> = rows
-            .filter_map(|r| r.ok())
+            .into_iter()
             .filter_map(|(entry, bytes)| {
+                // Intentional: malformed/unexpected-length embeddings are skipped
+                // silently. Genuine DB errors above already propagated via `?`.
                 let emb = decode_embedding(&bytes)?;
                 let sim = crate::memory::Embedder::cosine(query, &emb);
                 if sim >= min_sim {
@@ -478,5 +482,21 @@ mod tests {
         let query = vec![1.0, 0.0]; // orthogonal, sim = 0.0
         let results = store.semantic_search(&query, 5, 0.3).unwrap();
         assert!(results.is_empty(), "threshold should filter out sim=0 match");
+    }
+
+    #[test]
+    fn semantic_search_truncates_to_limit() {
+        let mut store = temp_store();
+        // Three rows, all near the query.
+        for (i, label) in ["first", "second", "third"].iter().enumerate() {
+            let emb = vec![1.0 - 0.01 * i as f32, 0.01 * i as f32];
+            store
+                .save_with_embedding(label, MemoryCategory::Notes, "explicit", Some(&emb))
+                .unwrap();
+        }
+        let query = vec![1.0, 0.0];
+        let results = store.semantic_search(&query, 1, 0.0).unwrap();
+        assert_eq!(results.len(), 1, "limit=1 must return exactly one row");
+        assert_eq!(results[0].0.content, "first");
     }
 }
