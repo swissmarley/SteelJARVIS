@@ -29,3 +29,6 @@ src-tauri/target/
 
 # Tauri build artifacts
 src-tauri/gen/
+
+# Internal planning docs (specs, plans) — not for publication
+docs/
