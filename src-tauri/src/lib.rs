@@ -4,6 +4,7 @@ mod memory;
 mod desktop;
 mod voice;
 mod search;
+mod session;
 mod permissions;
 mod observability;
 mod config;
