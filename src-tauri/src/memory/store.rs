@@ -122,8 +122,7 @@ impl MemoryStore {
         // has no ADD COLUMN IF NOT EXISTS, so probe first.
         let has_embedding: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('memories') WHERE name = 'embedding'")
-            .and_then(|mut s| s.exists([]))
-            .unwrap_or(false);
+            .and_then(|mut s| s.exists([]))?;
         if !has_embedding {
             conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", [])?;
         }
