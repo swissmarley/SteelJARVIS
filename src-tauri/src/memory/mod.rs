@@ -1,6 +1,8 @@
 pub mod store;
+pub mod embedder;
 
 pub use store::{MemoryStore, MemoryEntry, MemoryCategory};
+pub use embedder::Embedder;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
