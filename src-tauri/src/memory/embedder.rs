@@ -6,10 +6,13 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 /// initializer. The model files are downloaded to the user's cache dir on
 /// first use (~90MB for bge-small-en-v1.5). All embed() failures are soft —
 /// callers fall back to keyword search when this returns Err.
+// Wired into managed state in Task 5; suppress dead-code noise until then.
+#[allow(dead_code)]
 pub struct Embedder {
     inner: OnceLock<Result<Mutex<TextEmbedding>, String>>,
 }
 
+#[allow(dead_code)]
 impl Embedder {
     pub fn new() -> Self {
         Self {
