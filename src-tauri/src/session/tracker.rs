@@ -8,6 +8,12 @@ pub const IDLE_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
 /// Tracks when the user last interacted and when JARVIS last greeted.
 /// Drives the decision to play a contextual greeting on the next utterance.
+///
+/// Uses interior `Mutex` on its timestamp fields so every method takes `&self`.
+/// Register directly with `app.manage(SessionTracker::new())` — do NOT wrap
+/// in an outer `Mutex` at the Tauri state layer, or you will nest locks
+/// unnecessarily. This is intentionally inconsistent with the codebase's
+/// `Mutex::new(thing)` pattern for managed state.
 pub struct SessionTracker {
     last_interaction: Mutex<Option<DateTime<Local>>>,
     last_greeting: Mutex<Option<DateTime<Local>>>,
