@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::observability::{EventBus, JarvisEvent};
 use crate::voice::{SpeechManager, ClapDetector, ActivationManager, AudioCapture, SpeechRecognizer};
@@ -14,13 +14,14 @@ pub fn log_debug(tag: String, message: String) {
 #[tauri::command]
 pub fn speak(
     text: String,
+    app: AppHandle,
     speech: State<'_, Mutex<SpeechManager>>,
     event_bus: State<'_, Arc<Mutex<EventBus>>>,
 ) -> Result<(), String> {
     let speech = speech.lock().map_err(|e| e.to_string())?;
     let event_bus = event_bus.lock().map_err(|e| e.to_string())?;
     event_bus.emit(JarvisEvent::VoiceStateChanged { state: "speaking".to_string() });
-    speech.speak_async(&text)
+    speech.speak_async(&text, &app)
 }
 
 #[tauri::command]

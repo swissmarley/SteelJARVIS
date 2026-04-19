@@ -1,5 +1,8 @@
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Manager};
+
+use crate::voice::SpeechRecognizer;
 
 /// Speech manager using macOS native speech APIs.
 /// STT: Uses `speech` CLI or AppleScript with SFSpeechRecognizer
@@ -8,17 +11,39 @@ pub struct SpeechManager {
     voice_name: String,
     rate: u32,
     available_voices: Vec<String>,
-    // Text currently being spoken — used by the STT thread to distinguish
-    // JARVIS's own voice bleeding into the mic from a real user interrupt.
+    // Tracks the text currently being spoken. Used to decide when a spawned
+    // `say` has finished so we can resume STT exactly once per utterance.
     current_utterance: Arc<Mutex<Option<String>>>,
 }
 
 impl SpeechManager {
     pub fn new() -> Self {
         let voices = Self::list_voices_sync();
+        // Daniel (en_GB) is the macOS voice closest to the Paul Bettany JARVIS
+        // timbre — British male, measured cadence. Prefer the Premium /
+        // Enhanced variants when the user has downloaded them since they
+        // sound noticeably less synthetic. Rate 180 gives a slight butler
+        // deliberation vs. the default 200.
+        let preferred = [
+            "Daniel (Premium)",
+            "Daniel (Enhanced)",
+            "Oliver (Premium)",
+            "Oliver (Enhanced)",
+            "Arthur (Premium)",
+            "Arthur (Enhanced)",
+            "Daniel",
+            "Oliver",
+            "Arthur",
+            "Samantha",
+        ];
+        let default_voice = preferred
+            .iter()
+            .find(|name| voices.iter().any(|v| v == *name))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Samantha".to_string());
         Self {
-            voice_name: "Samantha".to_string(),
-            rate: 200,
+            voice_name: default_voice,
+            rate: 180,
             available_voices: voices,
             current_utterance: Arc::new(Mutex::new(None)),
         }
@@ -46,10 +71,21 @@ impl SpeechManager {
         }
     }
 
-    pub fn speak_async(&self, text: &str) -> Result<(), String> {
+    /// Speak asynchronously. Pauses STT for the duration of the utterance so
+    /// the recognizer never picks up JARVIS's own voice (which previously led
+    /// to phantom "user said" events and "you're repeating" replies). STT is
+    /// resumed ~400ms after `say` exits to let the mic tail settle.
+    pub fn speak_async(&self, text: &str, app: &AppHandle) -> Result<(), String> {
         let spoken = sanitize_for_tts(text);
         if spoken.trim().is_empty() {
             return Ok(());
+        }
+
+        // Mute STT before any audio leaves the speaker.
+        if let Some(stt_state) = app.try_state::<Mutex<SpeechRecognizer>>() {
+            if let Ok(mut stt) = stt_state.lock() {
+                let _ = stt.stop();
+            }
         }
 
         // Kill any previous `say` so back-to-back responses never overlap.
@@ -68,16 +104,34 @@ impl SpeechManager {
             .spawn()
             .map_err(|e| format!("TTS spawn error: {}", e))?;
 
-        // Clear the current utterance once this `say` exits so later partials
-        // aren't compared against stale text. Only clear if we're still the
-        // active utterance — a newer speak_async may have taken over.
         let utt = self.current_utterance.clone();
         let my_text = spoken.clone();
+        let app_for_resume = app.clone();
         std::thread::spawn(move || {
             let _ = child.wait();
-            if let Ok(mut guard) = utt.lock() {
-                if guard.as_deref() == Some(my_text.as_str()) {
-                    *guard = None;
+            let should_resume = {
+                if let Ok(mut guard) = utt.lock() {
+                    // Only the last-started utterance resumes STT; if a newer
+                    // speak_async overwrote us, its own wait thread will handle it.
+                    if guard.as_deref() == Some(my_text.as_str()) {
+                        *guard = None;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            if !should_resume {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            if let Some(stt_state) = app_for_resume.try_state::<Mutex<SpeechRecognizer>>() {
+                if let Ok(mut stt) = stt_state.lock() {
+                    if let Err(e) = stt.start() {
+                        eprintln!("[TTS→STT] failed to resume listening: {}", e);
+                    }
                 }
             }
         });
@@ -91,51 +145,6 @@ impl SpeechManager {
             *guard = None;
         }
         Ok(())
-    }
-
-    /// True while a `say` subprocess is still running.
-    pub fn is_speaking(&self) -> bool {
-        self.current_utterance
-            .lock()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
-    }
-
-    /// Heuristic echo filter: returns true when `partial` looks like JARVIS's
-    /// own TTS output being picked up by the mic, rather than fresh user
-    /// speech. Both sides are stripped of punctuation and lowercased before
-    /// comparing; we also accept a 50%+ word overlap since SFSpeechRecognizer
-    /// occasionally mis-transcribes the synthesized voice (e.g. "I" → "eye").
-    pub fn is_echo_of_current(&self, partial: &str) -> bool {
-        let guard = match self.current_utterance.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let utterance = match guard.as_ref() {
-            Some(u) => normalize_for_match(u),
-            None => return false,
-        };
-        let p = normalize_for_match(partial);
-        if p.is_empty() {
-            return true;
-        }
-
-        if utterance.contains(&p) {
-            return true;
-        }
-
-        let partial_words: Vec<&str> = p.split_whitespace().collect();
-        if partial_words.is_empty() {
-            return true;
-        }
-        let utterance_words: std::collections::HashSet<&str> =
-            utterance.split_whitespace().collect();
-        let overlap = partial_words
-            .iter()
-            .filter(|w| utterance_words.contains(*w))
-            .count();
-        let ratio = overlap as f32 / partial_words.len() as f32;
-        ratio >= 0.5
     }
 
     pub fn set_voice(&mut self, name: &str) -> Result<(), String> {
@@ -167,13 +176,30 @@ impl SpeechManager {
 
         match output {
             Ok(o) if o.status.success() => {
+                // `say -v ?` prints lines like:
+                //   Daniel (Enhanced)   en_GB    # Hello! My name is Daniel.
+                // The voice name can contain spaces and parens, so we can't
+                // just split on whitespace. Strip the `# greeting`, then
+                // treat everything before the final whitespace-separated
+                // token (the locale, e.g. `en_GB`) as the voice name. Only
+                // keep English voices so the UI picker stays manageable —
+                // non-English voices are still usable via direct `set_voice`.
                 String::from_utf8_lossy(&o.stdout)
                     .lines()
                     .filter_map(|line| {
-                        let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
-                        parts.first().map(|s| s.to_string())
+                        let before_hash = line.split('#').next().unwrap_or("").trim_end();
+                        let split_pos = before_hash.rfind(char::is_whitespace)?;
+                        let locale = before_hash[split_pos..].trim();
+                        if !locale.starts_with("en_") {
+                            return None;
+                        }
+                        let name = before_hash[..split_pos].trim();
+                        if name.is_empty() {
+                            None
+                        } else {
+                            Some(name.to_string())
+                        }
                     })
-                    .filter(|s| !s.is_empty())
                     .collect()
             }
             _ => vec!["Samantha".to_string(), "Alex".to_string(), "Victoria".to_string()],
@@ -224,16 +250,4 @@ fn is_emoji_or_symbol(ch: char) -> bool {
         || (0x2300..=0x23FF).contains(&code)
         || code == 0xFE0F
         || code == 0x200D
-}
-
-/// Lowercase, drop punctuation, collapse whitespace — used for comparing
-/// partial transcripts against current TTS text.
-fn normalize_for_match(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-        .collect::<String>()
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }

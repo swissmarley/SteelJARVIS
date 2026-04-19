@@ -298,12 +298,19 @@ export default function App() {
   useEffect(() => {
     setExecutionMode('idle');
 
-    // Delay auto-starting clap detection so the window is fully mounted and any
-    // first-run macOS microphone permission prompt has a chance to resolve
-    // before CPAL tries to open the input device.
+    // Delay auto-starting mic services so the window is fully mounted and any
+    // first-run macOS microphone / speech-recognition permission prompts have
+    // a chance to resolve before CPAL and AVAudioEngine open the input device.
     const clapBootTimer = setTimeout(() => {
-      useVoiceStore.getState().startClapDetection().catch((err) => {
+      const voice = useVoiceStore.getState();
+      voice.startClapDetection().catch((err) => {
         console.warn('[Voice] auto-start clap detection failed:', err);
+      });
+      // Start STT immediately so the user can speak without manually toggling
+      // the mic. STT is automatically paused while JARVIS speaks and resumed
+      // after TTS finishes.
+      voice.startListening().catch((err) => {
+        console.warn('[Voice] auto-start listening failed:', err);
       });
     }, 1500);
 

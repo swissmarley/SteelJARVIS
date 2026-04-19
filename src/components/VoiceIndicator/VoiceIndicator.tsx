@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useDashboardStore } from '../../stores/dashboard';
 import { useVoiceStore } from '../../stores/voice';
 import styles from './VoiceIndicator.module.css';
@@ -14,6 +15,16 @@ export default function VoiceIndicator() {
   const stopClapDetection = useVoiceStore((s) => s.stopClapDetection);
   const startListening = useVoiceStore((s) => s.startListening);
   const stopListening = useVoiceStore((s) => s.stopListening);
+  const currentVoice = useVoiceStore((s) => s.currentVoice);
+  const availableVoices = useVoiceStore((s) => s.availableVoices);
+  const setVoice = useVoiceStore((s) => s.setVoice);
+  const loadVoices = useVoiceStore((s) => s.loadVoices);
+  const loadConfig = useVoiceStore((s) => s.loadConfig);
+
+  useEffect(() => {
+    loadVoices();
+    loadConfig();
+  }, [loadVoices, loadConfig]);
 
   const stateConfig: Record<string, { label: string; color: string; pulse: boolean }> = {
     idle: { label: isListeningForSpeech ? 'HEARING' : (isListening ? 'CLAP ON' : 'MIC OFF'), color: isListeningForSpeech ? 'var(--color-success)' : (isListening ? 'var(--accent-primary)' : 'var(--text-muted)'), pulse: isListening || isListeningForSpeech },
@@ -74,6 +85,18 @@ export default function VoiceIndicator() {
       >
         {voiceEnabled ? 'Voice ON' : 'Voice OFF'}
       </button>
+      {availableVoices.length > 0 && (
+        <select
+          className={styles.voiceSelect}
+          value={currentVoice}
+          onChange={(e) => setVoice(e.target.value)}
+          title="JARVIS voice"
+        >
+          {availableVoices.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }

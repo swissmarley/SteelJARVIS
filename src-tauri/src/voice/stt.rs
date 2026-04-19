@@ -131,23 +131,10 @@ impl SpeechRecognizer {
             while let Ok(event) = rx.recv() {
                 match event {
                     SpeechEvent::Partial { text } => {
-                        // Barge-in: if we're mid-TTS and the partial looks
-                        // like fresh user speech (not JARVIS's own voice
-                        // echoing back), kill TTS so the user's next utterance
-                        // gets the floor. We require ≥3 words so random 1-word
-                        // mis-transcriptions never cut JARVIS off.
-                        let trimmed = text.trim();
-                        let word_count = trimmed.split_whitespace().count();
-                        if word_count >= 3 {
-                            if let Ok(speech) = event_app.state::<Mutex<SpeechManager>>().lock() {
-                                if speech.is_speaking() && !speech.is_echo_of_current(trimmed) {
-                                    eprintln!("[STT] barge-in: user interrupted TTS with {:?}", trimmed);
-                                    let _ = speech.stop_speaking();
-                                }
-                            }
-                        }
+                        // STT is muted while TTS plays (see SpeechManager::speak_async),
+                        // so any partial we see here is genuinely the user — no
+                        // echo filtering needed.
                         if let Ok(bus) = event_bus.lock() {
-                            eprintln!("[STT] event thread: emitting SpeechPartial");
                             bus.emit(JarvisEvent::SpeechPartial { text });
                         }
                     }
@@ -284,8 +271,9 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
                 }
 
                 // Speak the response so JARVIS answers even if the UI is hidden.
+                // speak_async mutes STT for the duration to prevent self-hearing.
                 if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
-                    if let Err(e) = speech.speak_async(&response) {
+                    if let Err(e) = speech.speak_async(&response, &app) {
                         eprintln!("[STT→Agent] TTS failed: {}", e);
                     }
                 }
