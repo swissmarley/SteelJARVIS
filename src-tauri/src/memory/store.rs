@@ -4,6 +4,28 @@ use std::path::Path;
 
 use super::MemoryError;
 
+/// Serialize an f32 vector as little-endian bytes for SQLite BLOB storage.
+pub(crate) fn encode_embedding(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for f in v {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    out
+}
+
+/// Decode an f32 vector from little-endian bytes. Returns `None` if the
+/// byte length isn't a multiple of 4.
+pub(crate) fn decode_embedding(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    Some(out)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MemoryCategory {
     Profile,
@@ -95,6 +117,17 @@ impl MemoryStore {
     pub fn new(path: &Path) -> Result<Self, MemoryError> {
         let conn = Connection::open(path)?;
         conn.execute_batch(SCHEMA)?;
+
+        // Idempotent migration: older DBs may not have `embedding`. SQLite
+        // has no ADD COLUMN IF NOT EXISTS, so probe first.
+        let has_embedding: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('memories') WHERE name = 'embedding'")
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
+        if !has_embedding {
+            conn.execute("ALTER TABLE memories ADD COLUMN embedding BLOB", [])?;
+        }
+
         Ok(Self { conn })
     }
 
@@ -241,10 +274,33 @@ CREATE TABLE IF NOT EXISTS memories (
     last_accessed TEXT,
     access_count INTEGER DEFAULT 0,
     conversation_id TEXT,
-    metadata TEXT
+    metadata TEXT,
+    embedding BLOB
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
 CREATE INDEX IF NOT EXISTS idx_memories_updated ON memories(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(pinned);
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_roundtrip_preserves_values() {
+        let v = vec![0.1f32, -0.2, 3.14, -123.456];
+        let bytes = encode_embedding(&v);
+        let back = decode_embedding(&bytes).expect("decode");
+        assert_eq!(back.len(), v.len());
+        for (a, b) in v.iter().zip(back.iter()) {
+            assert!((a - b).abs() < 1e-6, "{a} != {b}");
+        }
+    }
+
+    #[test]
+    fn decode_rejects_odd_length_bytes() {
+        let bad = vec![1u8, 2, 3];
+        assert!(decode_embedding(&bad).is_none());
+    }
+}
