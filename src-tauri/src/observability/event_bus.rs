@@ -32,6 +32,10 @@ pub enum JarvisEvent {
     // frontend only has to render the transcript.
     VoiceAgentResponse { user_text: String, assistant_text: String },
     VoiceAgentError { user_text: String, message: String },
+    /// Standalone greeting emitted when JARVIS proactively addresses the
+    /// user (first of session or after long idle). Rendered as an assistant
+    /// message without a paired user message.
+    JarvisGreeting { text: String },
 }
 
 impl JarvisEvent {
@@ -60,6 +64,7 @@ impl JarvisEvent {
             Self::ProviderStatusChanged { .. } => "system-health",
             Self::VoiceAgentResponse { .. } => "voice-agent-response",
             Self::VoiceAgentError { .. } => "voice-agent-error",
+            Self::JarvisGreeting { .. } => "jarvis-greeting",
         }
     }
 
@@ -88,6 +93,7 @@ impl JarvisEvent {
             Self::ProviderStatusChanged { provider, status } => serde_json::json!({"provider": provider, "status": status}),
             Self::VoiceAgentResponse { user_text, assistant_text } => serde_json::json!({"userText": user_text, "assistantText": assistant_text}),
             Self::VoiceAgentError { user_text, message } => serde_json::json!({"userText": user_text, "message": message}),
+            Self::JarvisGreeting { text } => serde_json::json!({"text": text}),
         }
     }
 }

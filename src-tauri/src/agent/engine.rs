@@ -551,6 +551,97 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
+/// Produces a single short greeting line based on the agent context. Uses a
+/// dedicated system prompt (no tools — greetings should never take action).
+pub async fn generate_greeting(
+    api_key: &str,
+    ctx: &AgentContext,
+) -> Result<String, String> {
+    if api_key.is_empty() {
+        return Err("No API key configured.".to_string());
+    }
+
+    let system = format!(
+        r#"You are JARVIS. Produce a single short greeting (1–2 sentences max) for a returning user. Factor in: local time of day, how long they've been away, their name if known, and any pinned memories provided. Do not answer a question, start a task, or list options — just greet. Be warm, witty, concise. Address them by name if known; otherwise "Sir".
+
+Context:
+- Local time: {now}
+- User: {name}
+- Last interaction: {last}
+
+<user_memories>
+{memories}
+</user_memories>"#,
+        now = ctx.now.format("%Y-%m-%d %H:%M"),
+        name = ctx
+            .user_name
+            .as_deref()
+            .unwrap_or("unknown (address as \"Sir\")"),
+        last = ctx
+            .last_interaction
+            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "first contact".to_string()),
+        memories = if ctx.memories.is_empty() {
+            "(none yet)".to_string()
+        } else {
+            ctx.memories
+                .iter()
+                .map(|m| format!("[{}] {}", m.category, m.content))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+    );
+
+    let request = ClaudeRequest {
+        model: MODEL.to_string(),
+        max_tokens: 200,
+        messages: vec![ClaudeMessage {
+            role: "user".to_string(),
+            content: serde_json::Value::String("Greet me.".to_string()),
+        }],
+        system,
+        tools: vec![],
+    };
+
+    let client = Client::new();
+    let response = client
+        .post(CLAUDE_API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("greeting network error: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("greeting API error {status}: {body}"));
+    }
+
+    let claude_response: ClaudeResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("greeting parse error: {e}"))?;
+
+    let text = claude_response
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            ResponseContent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if text.trim().is_empty() {
+        Err("greeting returned empty text".to_string())
+    } else {
+        Ok(text)
+    }
+}
+
 pub fn build_system_prompt(ctx: &AgentContext) -> String {
     let name = ctx
         .user_name
