@@ -9,6 +9,15 @@ use crate::memory::{MemoryEntry, MemoryStore, MemoryCategory, Embedder};
 use crate::observability::{EventBus, JarvisEvent};
 
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
+
+// Anthropic model alias. `claude-sonnet-4-6` resolves to the latest Claude
+// Sonnet 4.6 snapshot on the Messages API. This is the model SteelJARVIS
+// targets by project direction — do not swap to a 3.x or 4.5 identifier
+// without first updating the persona prompt and tool schemas, which were
+// tuned against Sonnet 4.6 behaviour. Verified reachable with the API key
+// in `.env`; any 404 here means the alias has been retired and the project
+// owner needs to pick a successor (e.g. pin to `claude-sonnet-4-6-YYYYMMDD`
+// or move to `claude-sonnet-4-7`).
 const MODEL: &str = "claude-sonnet-4-6";
 
 /// Per-turn context injected into the JARVIS system prompt.

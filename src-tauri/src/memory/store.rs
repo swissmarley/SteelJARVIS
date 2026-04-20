@@ -316,52 +316,50 @@ impl MemoryStore {
              WHERE embedding IS NOT NULL",
         )?;
 
-        let rows: Vec<(MemoryEntry, Vec<u8>)> = stmt
-            .query_map([], |row| {
-                let entry = MemoryEntry {
-                    id: row.get(0)?,
-                    content: row.get(1)?,
-                    category: row.get(2)?,
-                    confidence: row.get(3)?,
-                    source: row.get(4)?,
-                    privacy_label: row.get(5)?,
-                    pinned: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
-                    access_count: row.get(9)?,
-                };
-                let emb_bytes: Vec<u8> = row.get(10)?;
-                Ok((entry, emb_bytes))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        // Single-pass: decode + score + threshold-filter each row as we stream
+        // it from SQLite. Avoids allocating a `Vec<(MemoryEntry, Vec<u8>)>`
+        // just to throw most of it away, which matters once the user has
+        // thousands of memories. The only Vec we keep is `scored`, which is
+        // already bounded by `min_sim`.
+        let rows = stmt.query_map([], |row| {
+            let entry = MemoryEntry {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                category: row.get(2)?,
+                confidence: row.get(3)?,
+                source: row.get(4)?,
+                privacy_label: row.get(5)?,
+                pinned: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+                access_count: row.get(9)?,
+            };
+            let emb_bytes: Vec<u8> = row.get(10)?;
+            Ok((entry, emb_bytes))
+        })?;
 
-        let mut scored: Vec<(MemoryEntry, f32)> = rows
-            .into_iter()
-            .filter_map(|(entry, bytes)| {
-                // Genuine DB errors already propagated via `?` above; here we
-                // can only hit codec-level corruption (empty/odd-length blob
-                // or dim mismatch). Skip the row rather than poison the whole
-                // query, but log so a drifting schema or bad migration doesn't
-                // silently erode recall.
-                let emb = match decode_embedding(&bytes) {
-                    Some(v) => v,
-                    None => {
-                        eprintln!(
-                            "[semantic_search] skipping memory {} — malformed embedding blob ({} bytes)",
-                            entry.id,
-                            bytes.len()
-                        );
-                        return None;
-                    }
-                };
-                let sim = crate::memory::Embedder::cosine(query, &emb);
-                if sim >= min_sim {
-                    Some((entry, sim))
-                } else {
-                    None
+        let mut scored: Vec<(MemoryEntry, f32)> = Vec::new();
+        for row in rows {
+            // Genuine DB errors propagate; codec-level corruption (empty /
+            // odd-length blob, dim mismatch) is logged and skipped so one bad
+            // row can't poison the whole query.
+            let (entry, bytes) = row?;
+            let emb = match decode_embedding(&bytes) {
+                Some(v) => v,
+                None => {
+                    eprintln!(
+                        "[semantic_search] skipping memory {} — malformed embedding blob ({} bytes)",
+                        entry.id,
+                        bytes.len()
+                    );
+                    continue;
                 }
-            })
-            .collect();
+            };
+            let sim = crate::memory::Embedder::cosine(query, &emb);
+            if sim >= min_sim {
+                scored.push((entry, sim));
+            }
+        }
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit as usize);
