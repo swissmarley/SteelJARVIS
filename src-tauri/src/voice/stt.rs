@@ -5,6 +5,7 @@ use std::thread;
 use tauri::{AppHandle, Manager};
 
 use crate::agent::{AgentContext, AgentEngine};
+use crate::memory::{Embedder, MemoryStore};
 use crate::observability::{EventBus, JarvisEvent};
 use crate::voice::SpeechManager;
 
@@ -255,7 +256,18 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
 
         // TODO(Task 10): replace with build_context(...) once memory + session plumbing lands.
         let ctx = AgentContext::default();
-        let result = AgentEngine::send_with(&api_key, &history, &trimmed, &ctx, &bus_snapshot).await;
+        let mem_state = app.state::<Mutex<MemoryStore>>();
+        let embedder_state = app.state::<Embedder>();
+        let result = AgentEngine::send_with(
+            &api_key,
+            &history,
+            &trimmed,
+            &ctx,
+            &*mem_state,
+            &*embedder_state,
+            &bus_snapshot,
+        )
+        .await;
 
         match result {
             Ok((response, new_history)) => {

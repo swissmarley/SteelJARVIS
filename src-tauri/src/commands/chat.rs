@@ -2,13 +2,15 @@ use std::sync::{Arc, Mutex};
 use tauri::State;
 
 use crate::agent::{AgentContext, AgentEngine};
-use crate::memory::MemoryStore;
+use crate::memory::{Embedder, MemoryStore};
 use crate::observability::EventBus;
 
 #[tauri::command]
 pub async fn send_message(
     message: String,
     engine: State<'_, Mutex<AgentEngine>>,
+    mem_store: State<'_, Mutex<MemoryStore>>,
+    embedder: State<'_, Embedder>,
     event_bus: State<'_, Arc<Mutex<EventBus>>>,
 ) -> Result<String, String> {
     eprintln!("[Chat] send_message invoked, text={:?}", message);
@@ -27,7 +29,16 @@ pub async fn send_message(
 
     // TODO(Task 10): replace with build_context(...) once memory + session plumbing lands.
     let ctx = AgentContext::default();
-    let result = AgentEngine::send_with(&api_key, &history, &message, &ctx, &bus).await;
+    let result = AgentEngine::send_with(
+        &api_key,
+        &history,
+        &message,
+        &ctx,
+        &*mem_store,
+        &*embedder,
+        &bus,
+    )
+    .await;
     match &result {
         Ok((response, _)) => eprintln!("[Chat] agent response ({} chars)", response.len()),
         Err(e) => eprintln!("[Chat] agent error: {}", e),
