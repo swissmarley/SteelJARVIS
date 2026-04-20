@@ -362,6 +362,58 @@ fn execute_tool(
                 Err(e) => format!("save_memory failed: {e}"),
             }
         }
+        "recall_memory" => {
+            let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let limit = input
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32)
+                .unwrap_or(6);
+            if query.is_empty() {
+                return "recall_memory called with empty query.".to_string();
+            }
+
+            // Try semantic search first; fall back to LIKE if embedding fails.
+            let embedding = embedder.embed(query).ok();
+            let guard = match store.lock() {
+                Ok(g) => g,
+                Err(e) => return format!("recall_memory: lock poisoned: {e}"),
+            };
+
+            let results: Vec<(String, f32)> = if let Some(q_emb) = embedding {
+                match guard.semantic_search(&q_emb, limit, 0.3) {
+                    Ok(hits) => hits
+                        .into_iter()
+                        .map(|(e, s)| (format!("[{}] {}", e.category, e.content), s))
+                        .collect(),
+                    Err(e) => return format!("recall_memory search failed: {e}"),
+                }
+            } else {
+                match guard.search(query, limit) {
+                    Ok(hits) => hits
+                        .into_iter()
+                        .map(|e| (format!("[{}] {}", e.category, e.content), 0.0))
+                        .collect(),
+                    Err(e) => return format!("recall_memory fallback search failed: {e}"),
+                }
+            };
+
+            if results.is_empty() {
+                "No matching memories.".to_string()
+            } else {
+                results
+                    .into_iter()
+                    .map(|(line, sim)| {
+                        if sim > 0.0 {
+                            format!("{line} (sim {:.2})", sim)
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
         "draft_job_description" => {
             let role = input.get("role").and_then(|v| v.as_str()).unwrap_or("unknown role");
             let department = input.get("department").and_then(|v| v.as_str()).unwrap_or("");
@@ -435,6 +487,18 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
                     "category": { "type": "string", "description": "Category: profile, preferences, facts, notes, recruiting", "enum": ["profile", "preferences", "facts", "notes", "recruiting", "workflows"] }
                 },
                 "required": ["content"]
+            }),
+        },
+        ToolDefinition {
+            name: "recall_memory".to_string(),
+            description: "Search the user's long-term memory for entries matching a natural-language query. Use this when the user asks what you know about them, or when you need prior context before answering.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "What to look for (e.g. 'drinks', 'work schedule', 'birthday')" },
+                    "limit": { "type": "integer", "description": "Max results (default 6)", "minimum": 1, "maximum": 20 }
+                },
+                "required": ["query"]
             }),
         },
         ToolDefinition {
