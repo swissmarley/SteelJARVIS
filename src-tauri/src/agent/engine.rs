@@ -2,10 +2,33 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
+use chrono::{DateTime, Local};
+
+use crate::memory::MemoryEntry;
 use crate::observability::{EventBus, JarvisEvent};
 
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODEL: &str = "claude-sonnet-4-6";
+
+/// Per-turn context injected into the JARVIS system prompt.
+#[derive(Debug, Clone)]
+pub struct AgentContext {
+    pub now: DateTime<Local>,
+    pub user_name: Option<String>,
+    pub last_interaction: Option<DateTime<Local>>,
+    pub memories: Vec<MemoryEntry>,
+}
+
+impl Default for AgentContext {
+    fn default() -> Self {
+        Self {
+            now: Local::now(),
+            user_name: None,
+            last_interaction: None,
+            memories: vec![],
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClaudeMessage {
@@ -77,6 +100,7 @@ impl AgentEngine {
         api_key: &str,
         history: &[ClaudeMessage],
         message: &str,
+        ctx: &AgentContext,
         event_bus: &EventBus,
     ) -> Result<(String, Vec<ClaudeMessage>), String> {
         if api_key.is_empty() {
@@ -113,7 +137,7 @@ impl AgentEngine {
                 model: MODEL.to_string(),
                 max_tokens: 4096,
                 messages: messages.clone(),
-                system: build_system_prompt(),
+                system: build_system_prompt(ctx),
                 tools: tools.clone(),
             };
 
@@ -433,28 +457,106 @@ fn get_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
-fn build_system_prompt() -> String {
-    r#"You are JARVIS, an autonomous desktop assistant. You are helpful, intelligent, and proactive.
+pub fn build_system_prompt(ctx: &AgentContext) -> String {
+    let name = ctx
+        .user_name
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unknown (address as \"Sir\")".to_string());
 
-You have access to tools that let you take real actions on the user's Mac. Use them when the user asks you to do something that requires system interaction. When you use tools, the results will be shown to you so you can respond intelligently.
+    let last_interaction = ctx
+        .last_interaction
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "first contact".to_string());
 
-Guidelines:
-- When asked to open or launch an app, use the launch_app tool
-- When asked to open a URL, use the open_url tool
-- When asked to open a file, use the open_file tool
-- When asked about running apps, use the list_running_apps tool
-- When the user says "remember this" or "save this", use the save_memory tool
-- When asked to draft a job description, use the draft_job_description tool and then write the JD in your response
-- When asked to draft outreach to a candidate, use the draft_outreach tool and then write the message
-- When asked to draft interview questions, use the draft_interview_questions tool and then write the questions
-- For questions and conversations, respond directly without tools
-- Be concise and efficient — think like an executive assistant
-- If a tool fails, explain what happened and suggest alternatives
+    let memories_block = if ctx.memories.is_empty() {
+        "(none yet)".to_string()
+    } else {
+        ctx.memories
+            .iter()
+            .map(|m| format!("[{}] {}", m.category, m.content))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
-Recruiting capabilities:
-- Draft job descriptions for any role and level
-- Write candidate outreach messages (emails, LinkedIn)
-- Generate interview question packs (technical, behavioral, leadership)
-- Help compare candidates and assess fit
-- All recruiting context is saved in memory for future reference"#.to_string()
+    format!(
+        r#"You are JARVIS — a highly intelligent, proactive desktop assistant modeled on Tony Stark's butler AI. You address the user by their name when you know it; otherwise, "Sir". You are confident, witty, professional, and concise. Favor short, complete sentences. Occasional dry humor is welcome, but never waste the user's time. When you have evidence of a preference, habit, or prior context, factor it in and briefly state why. You never roleplay as a human, and you never deny being an AI.
+
+Current context:
+- Local time: {now}
+- User: {name}
+- Last interaction: {last}
+
+<user_memories>
+{memories}
+</user_memories>
+
+You have tools for taking real actions on the user's Mac. Use them when an action is required. For conversation and questions, answer directly. When the user explicitly says "remember this" or similar, use save_memory. When you need to recall something about the user, use recall_memory."#,
+        now = ctx.now.format("%Y-%m-%d %H:%M"),
+        name = name,
+        last = last_interaction,
+        memories = memories_block,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn system_prompt_includes_persona_signature() {
+        let ctx = AgentContext::default();
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("JARVIS"), "prompt must name-check JARVIS");
+        assert!(prompt.to_lowercase().contains("butler") || prompt.contains("Tony Stark"));
+    }
+
+    #[test]
+    fn system_prompt_renders_user_name_when_known() {
+        let ctx = AgentContext {
+            now: Local.with_ymd_and_hms(2026, 4, 19, 9, 30, 0).unwrap(),
+            user_name: Some("Nakya".to_string()),
+            last_interaction: None,
+            memories: vec![],
+        };
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("Nakya"), "known name should appear in context block");
+    }
+
+    #[test]
+    fn system_prompt_falls_back_to_unknown_when_name_missing() {
+        let ctx = AgentContext {
+            now: Local.with_ymd_and_hms(2026, 4, 19, 9, 30, 0).unwrap(),
+            user_name: None,
+            last_interaction: None,
+            memories: vec![],
+        };
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("unknown") || prompt.to_lowercase().contains("sir"));
+    }
+
+    #[test]
+    fn system_prompt_renders_memories_with_category() {
+        let ctx = AgentContext {
+            now: Local::now(),
+            user_name: None,
+            last_interaction: None,
+            memories: vec![MemoryEntry {
+                id: "id-1".into(),
+                content: "User prefers espresso".into(),
+                category: "preferences".into(),
+                confidence: 1.0,
+                source: "explicit".into(),
+                privacy_label: "normal".into(),
+                pinned: false,
+                created_at: "".into(),
+                updated_at: "".into(),
+                access_count: 0,
+            }],
+        };
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("User prefers espresso"));
+        assert!(prompt.contains("[preferences]"));
+    }
 }
