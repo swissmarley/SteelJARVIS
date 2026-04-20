@@ -364,17 +364,27 @@ fn execute_tool(
         }
         "recall_memory" => {
             let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            // Clamp model-supplied limit to the schema-advertised range so a
+            // misbehaving prompt can't request millions of rows.
             let limit = input
                 .get("limit")
                 .and_then(|v| v.as_u64())
-                .map(|n| n as u32)
+                .map(|n| n.clamp(1, 20) as u32)
                 .unwrap_or(6);
             if query.is_empty() {
                 return "recall_memory called with empty query.".to_string();
             }
 
             // Try semantic search first; fall back to LIKE if embedding fails.
-            let embedding = embedder.embed(query).ok();
+            // Surface the embedding error so a missing/corrupt model file is
+            // visible in the dev console instead of silently degrading.
+            let embedding = match embedder.embed(query) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("[recall_memory] embedding failed, falling back to LIKE: {e}");
+                    None
+                }
+            };
             let guard = match store.lock() {
                 Ok(g) => g,
                 Err(e) => return format!("recall_memory: lock poisoned: {e}"),
