@@ -1,10 +1,11 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Local};
 
-use crate::memory::MemoryEntry;
+use crate::memory::{MemoryEntry, MemoryStore, MemoryCategory, Embedder};
 use crate::observability::{EventBus, JarvisEvent};
 
 const CLAUDE_API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -101,6 +102,8 @@ impl AgentEngine {
         history: &[ClaudeMessage],
         message: &str,
         ctx: &AgentContext,
+        store: &Mutex<MemoryStore>,
+        embedder: &Embedder,
         event_bus: &EventBus,
     ) -> Result<(String, Vec<ClaudeMessage>), String> {
         if api_key.is_empty() {
@@ -238,7 +241,7 @@ impl AgentEngine {
                             params: input.clone(),
                         });
 
-                        let result = execute_tool(name, &input);
+                        let result = execute_tool(name, &input, store, embedder);
 
                         event_bus.emit(JarvisEvent::ToolCompleted {
                             tool: name.clone(),
@@ -288,7 +291,12 @@ impl AgentEngine {
     }
 }
 
-fn execute_tool(name: &str, input: &serde_json::Value) -> String {
+fn execute_tool(
+    name: &str,
+    input: &serde_json::Value,
+    store: &Mutex<MemoryStore>,
+    embedder: &Embedder,
+) -> String {
     match name {
         "launch_app" => {
             let app_name = input.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
@@ -340,7 +348,19 @@ fn execute_tool(name: &str, input: &serde_json::Value) -> String {
         "save_memory" => {
             let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
             let category = input.get("category").and_then(|v| v.as_str()).unwrap_or("notes");
-            format!("Memory saved: [{}] {}", category, content)
+            if content.is_empty() {
+                return "save_memory called with empty content — nothing saved.".to_string();
+            }
+            let cat = MemoryCategory::from_str(category);
+            let embedding = embedder.embed(content).ok();
+            let mut guard = match store.lock() {
+                Ok(g) => g,
+                Err(e) => return format!("save_memory: memory store lock poisoned: {e}"),
+            };
+            match guard.save_with_embedding(content, cat, "explicit", embedding.as_deref()) {
+                Ok(entry) => format!("Saved to {} (id={}).", entry.category, entry.id),
+                Err(e) => format!("save_memory failed: {e}"),
+            }
         }
         "draft_job_description" => {
             let role = input.get("role").and_then(|v| v.as_str()).unwrap_or("unknown role");
