@@ -266,6 +266,38 @@ export default function App() {
     [addMessage, addActionEvent, addError, setStreaming, setExecutionMode]
   );
 
+  const handleJarvisGreeting = useCallback(
+    (payload: { text: string }) => {
+      uiLog('Voice', `jarvis-greeting: len=${payload.text.length}`);
+      const now = Date.now();
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: payload.text,
+        timestamp: now,
+      });
+      addActionEvent({
+        id: crypto.randomUUID(),
+        type: 'JarvisGreeted',
+        description: payload.text.slice(0, 160),
+        timestamp: now,
+      });
+    },
+    [addMessage, addActionEvent]
+  );
+
+  // The chat path (commands::chat::send_message) emits "jarvis-greeting-speak"
+  // with the greeting text as a raw string so the frontend triggers TTS. The
+  // voice path handles TTS backend-side via SpeechManager; chat has to round-
+  // trip through `speak` to get the same audio behaviour. Without this the
+  // greeting renders silently in keyboard-driven mode.
+  const handleJarvisGreetingSpeak = useCallback((text: string) => {
+    uiLog('Voice', `jarvis-greeting-speak: len=${text.length}`);
+    invoke('speak', { text }).catch((err) => {
+      uiLog('Voice', `jarvis-greeting-speak failed: ${String(err)}`);
+    });
+  }, []);
+
   useTauriEvent('state-changed', handleStateChanged);
   useTauriEvent('voice-state-changed', handleVoiceStateChanged);
   useTauriEvent('error', handleError);
@@ -280,6 +312,8 @@ export default function App() {
   useTauriEvent('stt-error', handleSttError);
   useTauriEvent('voice-agent-response', handleVoiceAgentResponse);
   useTauriEvent('voice-agent-error', handleVoiceAgentError);
+  useTauriEvent('jarvis-greeting', handleJarvisGreeting);
+  useTauriEvent('jarvis-greeting-speak', handleJarvisGreetingSpeak);
 
   useTauriEvent('toggle-clap-from-tray', useCallback(() => {
     const { isListening, startClapDetection, stopClapDetection } = useVoiceStore.getState();

@@ -222,6 +222,44 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
     eprintln!("[STT→Agent] dispatching {:?} to agent", trimmed);
 
     tauri::async_runtime::spawn(async move {
+        use crate::agent::{build_context, try_greet};
+        use crate::memory::{Embedder, MemoryStore};
+        use crate::session::SessionTracker;
+
+        let tracker_state = app.state::<SessionTracker>();
+        let mem_state = app.state::<Mutex<MemoryStore>>();
+        let embedder_state = app.state::<Embedder>();
+
+        // Greeting pre-step — shared with the chat path via `try_greet`.
+        // Voice differs only in how it speaks: `SpeechManager::speak_async`
+        // plus a 300 ms buffer so the greeting audio spins up before the
+        // main response starts talking.
+        let greeting_api_key = {
+            let engine_state = app.state::<Mutex<AgentEngine>>();
+            let engine = match engine_state.lock() {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            engine.api_key().to_string()
+        };
+        if let Some(text) = try_greet(
+            &greeting_api_key,
+            &trimmed,
+            &mem_state,
+            &embedder_state,
+            &tracker_state,
+            &event_bus,
+        )
+        .await
+        {
+            if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
+                let _ = speech.speak_async(&text, &app);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+
+        tracker_state.mark_interaction();
+
         let (api_key, history) = {
             let engine_state = app.state::<Mutex<AgentEngine>>();
             let engine = match engine_state.lock() {
@@ -253,7 +291,18 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
             }
         };
 
-        let result = AgentEngine::send_with(&api_key, &history, &trimmed, &bus_snapshot).await;
+        let ctx = build_context(&mem_state, &embedder_state, &tracker_state, Some(&trimmed));
+
+        let result = AgentEngine::send_with(
+            &api_key,
+            &history,
+            &trimmed,
+            &ctx,
+            &mem_state,
+            &embedder_state,
+            &bus_snapshot,
+        )
+        .await;
 
         match result {
             Ok((response, new_history)) => {
@@ -270,8 +319,6 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
                     });
                 }
 
-                // Speak the response so JARVIS answers even if the UI is hidden.
-                // speak_async mutes STT for the duration to prevent self-hearing.
                 if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
                     if let Err(e) = speech.speak_async(&response, &app) {
                         eprintln!("[STT→Agent] TTS failed: {}", e);

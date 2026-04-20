@@ -4,6 +4,7 @@ mod memory;
 mod desktop;
 mod voice;
 mod search;
+mod session;
 mod permissions;
 mod observability;
 mod config;
@@ -37,6 +38,15 @@ pub fn run() {
             std::fs::create_dir_all(mem_path.parent().unwrap())?;
             let mem_store = memory::MemoryStore::new(&mem_path)?;
             app.manage(Mutex::new(mem_store));
+
+            // Embedder uses interior OnceLock — register directly, no outer Mutex.
+            let embedder = memory::Embedder::new();
+            app.manage(embedder);
+
+            // SessionTracker uses interior Mutex fields — register directly, no outer Mutex.
+            // See SessionTracker doc comment in src/session/tracker.rs.
+            let session_tracker = session::SessionTracker::new();
+            app.manage(session_tracker);
 
             let mut event_bus = observability::EventBus::new(1000);
             event_bus.set_app_handle(app.handle().clone());

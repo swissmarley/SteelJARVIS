@@ -29,3 +29,9 @@ src-tauri/target/
 
 # Tauri build artifacts
 src-tauri/gen/
+
+# Internal planning docs (specs, plans) — not for publication
+docs/
+
+# fastembed ONNX model cache — downloaded on first run, too big for Git
+src-tauri/.fastembed_cache/
