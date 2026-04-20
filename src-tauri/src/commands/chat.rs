@@ -20,7 +20,7 @@ pub async fn send_message(
 
     // Greeting pre-step (if due and the message isn't itself a pure greeting).
     if tracker.should_greet() && !is_pure_greeting(&message) {
-        let greeting_ctx = build_context(&*mem_store, &*embedder, &*tracker, None);
+        let greeting_ctx = build_context(&mem_store, &embedder, &tracker, None);
         let api_key = {
             let e = engine.lock().map_err(|e| e.to_string())?;
             e.api_key().to_string()
@@ -51,7 +51,7 @@ pub async fn send_message(
         return Err("ANTHROPIC_API_KEY is not configured. Add it to .env or the environment and restart.".to_string());
     }
 
-    let ctx = build_context(&*mem_store, &*embedder, &*tracker, Some(&message));
+    let ctx = build_context(&mem_store, &embedder, &tracker, Some(&message));
     let bus = event_bus.lock().map_err(|e| e.to_string())?.clone();
 
     let result = AgentEngine::send_with(
@@ -59,8 +59,8 @@ pub async fn send_message(
         &history,
         &message,
         &ctx,
-        &*mem_store,
-        &*embedder,
+        &mem_store,
+        &embedder,
         &bus,
     )
     .await;

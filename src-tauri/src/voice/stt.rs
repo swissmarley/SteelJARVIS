@@ -232,7 +232,7 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
 
         // Greeting pre-step
         if tracker_state.should_greet() && !is_pure_greeting(&trimmed) {
-            let greeting_ctx = build_context(&*mem_state, &*embedder_state, &*tracker_state, None);
+            let greeting_ctx = build_context(&mem_state, &embedder_state, &tracker_state, None);
             let (api_key,) = {
                 let engine_state = app.state::<Mutex<AgentEngine>>();
                 let engine = match engine_state.lock() {
@@ -293,15 +293,15 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
             }
         };
 
-        let ctx = build_context(&*mem_state, &*embedder_state, &*tracker_state, Some(&trimmed));
+        let ctx = build_context(&mem_state, &embedder_state, &tracker_state, Some(&trimmed));
 
         let result = AgentEngine::send_with(
             &api_key,
             &history,
             &trimmed,
             &ctx,
-            &*mem_state,
-            &*embedder_state,
+            &mem_state,
+            &embedder_state,
             &bus_snapshot,
         )
         .await;
