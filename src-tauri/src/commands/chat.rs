@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
-use crate::agent::AgentEngine;
+use crate::agent::{AgentContext, AgentEngine};
 use crate::memory::MemoryStore;
 use crate::observability::EventBus;
 
@@ -25,7 +25,9 @@ pub async fn send_message(
 
     let bus = event_bus.lock().map_err(|e| e.to_string())?.clone();
 
-    let result = AgentEngine::send_with(&api_key, &history, &message, &bus).await;
+    // TODO(Task 10): replace with build_context(...) once memory + session plumbing lands.
+    let ctx = AgentContext::default();
+    let result = AgentEngine::send_with(&api_key, &history, &message, &ctx, &bus).await;
     match &result {
         Ok((response, _)) => eprintln!("[Chat] agent response ({} chars)", response.len()),
         Err(e) => eprintln!("[Chat] agent error: {}", e),
