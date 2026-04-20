@@ -98,7 +98,12 @@ pub fn build_context(
 }
 
 /// Extracts a name from a Profile memory like "User's name is Nakya" or
-/// "name: Nakya". Returns None when nothing plausible is found.
+/// "name: Tony Stark". Returns None when nothing plausible is found.
+///
+/// Terminates on sentence-level punctuation (`.,!?;:\n`) so multi-word
+/// names like "Tony Stark" or "Jean-Luc Picard" survive. Word count is
+/// capped at 3 so a rambling sentence such as "I am Bob the builder of
+/// things" doesn't swallow the full tail as the "name".
 fn extract_name_from_profile(content: &str) -> Option<String> {
     let lower = content.to_lowercase();
     for marker in ["name is ", "name: ", "i am ", "i'm "] {
@@ -106,11 +111,12 @@ fn extract_name_from_profile(content: &str) -> Option<String> {
             let start = idx + marker.len();
             let tail = &content[start..];
             let name = tail
-                .split(|c: char| !(c.is_alphabetic() || c == '-' || c == '\''))
+                .split(|c: char| matches!(c, '.' | '!' | '?' | ',' | ';' | ':' | '\n'))
                 .next()
                 .unwrap_or("")
                 .trim();
-            if !name.is_empty() && name.len() <= 40 {
+            let word_count = name.split_whitespace().count();
+            if !name.is_empty() && name.len() <= 40 && (1..=3).contains(&word_count) {
                 return Some(name.to_string());
             }
         }
@@ -858,5 +864,31 @@ mod tests {
             Some("Jordan".to_string())
         );
         assert_eq!(extract_name_from_profile("Prefers espresso"), None);
+    }
+
+    #[test]
+    fn extract_name_preserves_multi_word_names() {
+        assert_eq!(
+            extract_name_from_profile("User's name is Tony Stark."),
+            Some("Tony Stark".to_string())
+        );
+        assert_eq!(
+            extract_name_from_profile("My name is Jean-Luc Picard, captain of the Enterprise"),
+            Some("Jean-Luc Picard".to_string())
+        );
+        assert_eq!(
+            extract_name_from_profile("I am Ada Lovelace\nand I like math"),
+            Some("Ada Lovelace".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_name_rejects_rambling_tails() {
+        // No terminator + 4+ words → reject rather than return a sentence
+        // as "the user's name".
+        assert_eq!(
+            extract_name_from_profile("I am Bob the builder of large things"),
+            None
+        );
     }
 }
