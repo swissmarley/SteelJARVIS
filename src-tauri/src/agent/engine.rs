@@ -308,7 +308,7 @@ impl AgentEngine {
                             params: input.clone(),
                         });
 
-                        let result = execute_tool(name, &input, store, embedder);
+                        let result = execute_tool(name, input, store, embedder, event_bus);
 
                         event_bus.emit(JarvisEvent::ToolCompleted {
                             tool: name.clone(),
@@ -363,6 +363,7 @@ fn execute_tool(
     input: &serde_json::Value,
     store: &Mutex<MemoryStore>,
     embedder: &Embedder,
+    event_bus: &EventBus,
 ) -> String {
     match name {
         "launch_app" => {
@@ -425,7 +426,17 @@ fn execute_tool(
                 Err(e) => return format!("save_memory: memory store lock poisoned: {e}"),
             };
             match guard.save_with_embedding(content, cat, "explicit", embedding.as_deref()) {
-                Ok(entry) => format!("Saved to {} (id={}).", entry.category, entry.id),
+                Ok(entry) => {
+                    // Mirror commands/memory.rs::save_memory so the dashboard
+                    // timeline shows memories captured via the agent tool too,
+                    // not just the explicit frontend command.
+                    event_bus.emit(JarvisEvent::MemorySaved {
+                        id: entry.id.clone(),
+                        category: entry.category.clone(),
+                        preview: content.chars().take(100).collect::<String>(),
+                    });
+                    format!("Saved to {} (id={}).", entry.category, entry.id)
+                }
                 Err(e) => format!("save_memory failed: {e}"),
             }
         }

@@ -230,32 +230,40 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
         let mem_state = app.state::<Mutex<MemoryStore>>();
         let embedder_state = app.state::<Embedder>();
 
-        // Greeting pre-step
-        if tracker_state.should_greet() && !is_pure_greeting(&trimmed) {
-            let greeting_ctx = build_context(&mem_state, &embedder_state, &tracker_state, None);
-            let (api_key,) = {
-                let engine_state = app.state::<Mutex<AgentEngine>>();
-                let engine = match engine_state.lock() {
-                    Ok(e) => e,
-                    Err(_) => return,
+        // Greeting pre-step. Mirror `commands/chat.rs`:
+        //   a) due + pure-greeting utterance → skip the extra API call but
+        //      still mark greeted so we don't re-fire next turn.
+        //   b) due + real task → generate a contextual greeting.
+        // `mark_greeted` runs even on API failure to prevent per-turn retries.
+        if tracker_state.should_greet() {
+            if is_pure_greeting(&trimmed) {
+                tracker_state.mark_greeted();
+            } else {
+                tracker_state.mark_greeted();
+                let greeting_ctx = build_context(&mem_state, &embedder_state, &tracker_state, None);
+                let api_key = {
+                    let engine_state = app.state::<Mutex<AgentEngine>>();
+                    let engine = match engine_state.lock() {
+                        Ok(e) => e,
+                        Err(_) => return,
+                    };
+                    engine.api_key().to_string()
                 };
-                (engine.api_key().to_string(),)
-            };
-            if !api_key.is_empty() {
-                match generate_greeting(&api_key, &greeting_ctx).await {
-                    Ok(text) => {
-                        tracker_state.mark_greeted();
-                        if let Ok(bus) = event_bus.lock() {
-                            bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+                if !api_key.is_empty() {
+                    match generate_greeting(&api_key, &greeting_ctx).await {
+                        Ok(text) => {
+                            if let Ok(bus) = event_bus.lock() {
+                                bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+                            }
+                            if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
+                                let _ = speech.speak_async(&text, &app);
+                            }
+                            // Small buffer so the greeting finishes spinning up
+                            // before the main response starts speaking.
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         }
-                        if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
-                            let _ = speech.speak_async(&text, &app);
-                        }
-                        // Small buffer so the greeting finishes spinning up before
-                        // the main response starts speaking.
-                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                        Err(e) => eprintln!("[STT→Greet] greeting skipped: {e}"),
                     }
-                    Err(e) => eprintln!("[STT→Greet] greeting skipped: {e}"),
                 }
             }
         }

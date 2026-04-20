@@ -18,24 +18,34 @@ pub async fn send_message(
 ) -> Result<String, String> {
     eprintln!("[Chat] send_message invoked, text={:?}", message);
 
-    // Greeting pre-step (if due and the message isn't itself a pure greeting).
-    if tracker.should_greet() && !is_pure_greeting(&message) {
-        let greeting_ctx = build_context(&mem_store, &embedder, &tracker, None);
-        let api_key = {
-            let e = engine.lock().map_err(|e| e.to_string())?;
-            e.api_key().to_string()
-        };
-        if !api_key.is_empty() {
-            match generate_greeting(&api_key, &greeting_ctx).await {
-                Ok(text) => {
-                    tracker.mark_greeted();
-                    if let Ok(bus) = event_bus.lock() {
-                        bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+    // Greeting pre-step. Two cases:
+    //   a) due + the message is itself a pure greeting → skip the extra API
+    //      call (the agent's own reply will cover the hello), but still mark
+    //      greeted so we don't re-fire on the very next turn.
+    //   b) due + real task message → generate a contextual greeting.
+    // In both branches we call `mark_greeted` even on failure so a flaky
+    // Anthropic call can't cause a greeting-per-turn storm.
+    if tracker.should_greet() {
+        if is_pure_greeting(&message) {
+            tracker.mark_greeted();
+        } else {
+            tracker.mark_greeted();
+            let greeting_ctx = build_context(&mem_store, &embedder, &tracker, None);
+            let api_key = {
+                let e = engine.lock().map_err(|e| e.to_string())?;
+                e.api_key().to_string()
+            };
+            if !api_key.is_empty() {
+                match generate_greeting(&api_key, &greeting_ctx).await {
+                    Ok(text) => {
+                        if let Ok(bus) = event_bus.lock() {
+                            bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+                        }
+                        // Speak the greeting too so behavior matches voice path.
+                        let _ = app.emit("jarvis-greeting-speak", text);
                     }
-                    // Speak the greeting too so behavior matches voice path.
-                    let _ = app.emit("jarvis-greeting-speak", text);
+                    Err(e) => eprintln!("[Chat] greeting skipped: {e}"),
                 }
-                Err(e) => eprintln!("[Chat] greeting skipped: {e}"),
             }
         }
     }
