@@ -33,6 +33,15 @@ impl Default for AgentContext {
 
 /// Build an AgentContext by resolving the user's name from memory and
 /// pulling top-K semantic matches (or pinned memories if no query is given).
+///
+/// Lock discipline: the ONNX `embedder.embed` call is performed *before*
+/// acquiring `store.lock()` so CPU-bound embedding work doesn't serialize
+/// every other memory reader. The store lock is then held only for the
+/// quick name lookup and the in-memory cosine scan. Callers invoke this
+/// from async contexts (`commands::chat::send_message` and
+/// `voice::stt::dispatch_to_agent`); with the embed call outside the lock
+/// the remaining hold is short enough that blocking on `std::sync::Mutex`
+/// is acceptable without `spawn_blocking`.
 pub fn build_context(
     store: &Mutex<MemoryStore>,
     embedder: &Embedder,
@@ -41,6 +50,10 @@ pub fn build_context(
 ) -> AgentContext {
     let now = Local::now();
     let last_interaction = tracker.last_interaction();
+
+    // Embed outside the store lock so slow ONNX work never blocks other
+    // memory reads/writes. `Err` here means we'll fall back to LIKE search.
+    let query_embedding: Option<Result<Vec<f32>, String>> = query.map(|q| embedder.embed(q));
 
     let (user_name, memories) = match store.lock() {
         Ok(guard) => {
@@ -51,17 +64,15 @@ pub fn build_context(
                 .into_iter()
                 .find_map(|m| extract_name_from_profile(&m.content));
 
-            let memories = match query {
-                Some(q) => match embedder.embed(q) {
-                    Ok(q_emb) => guard
-                        .semantic_search(&q_emb, 6, 0.3)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(e, _)| e)
-                        .collect(),
-                    Err(_) => guard.search(q, 6).unwrap_or_default(),
-                },
-                None => guard.list_pinned(5).unwrap_or_default(),
+            let memories = match (query, query_embedding) {
+                (Some(_), Some(Ok(q_emb))) => guard
+                    .semantic_search(&q_emb, 6, 0.3)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(e, _)| e)
+                    .collect(),
+                (Some(q), _) => guard.search(q, 6).unwrap_or_default(),
+                (None, _) => guard.list_pinned(5).unwrap_or_default(),
             };
 
             (user_name, memories)

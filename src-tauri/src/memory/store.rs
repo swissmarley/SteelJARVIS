@@ -338,9 +338,22 @@ impl MemoryStore {
         let mut scored: Vec<(MemoryEntry, f32)> = rows
             .into_iter()
             .filter_map(|(entry, bytes)| {
-                // Intentional: malformed/unexpected-length embeddings are skipped
-                // silently. Genuine DB errors above already propagated via `?`.
-                let emb = decode_embedding(&bytes)?;
+                // Genuine DB errors already propagated via `?` above; here we
+                // can only hit codec-level corruption (empty/odd-length blob
+                // or dim mismatch). Skip the row rather than poison the whole
+                // query, but log so a drifting schema or bad migration doesn't
+                // silently erode recall.
+                let emb = match decode_embedding(&bytes) {
+                    Some(v) => v,
+                    None => {
+                        eprintln!(
+                            "[semantic_search] skipping memory {} — malformed embedding blob ({} bytes)",
+                            entry.id,
+                            bytes.len()
+                        );
+                        return None;
+                    }
+                };
                 let sim = crate::memory::Embedder::cosine(query, &emb);
                 if sim >= min_sim {
                     Some((entry, sim))

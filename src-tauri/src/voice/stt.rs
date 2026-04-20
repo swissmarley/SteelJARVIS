@@ -222,7 +222,7 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
     eprintln!("[STT→Agent] dispatching {:?} to agent", trimmed);
 
     tauri::async_runtime::spawn(async move {
-        use crate::agent::{build_context, generate_greeting};
+        use crate::agent::{build_context, try_greet};
         use crate::memory::{Embedder, MemoryStore};
         use crate::session::SessionTracker;
 
@@ -230,42 +230,32 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
         let mem_state = app.state::<Mutex<MemoryStore>>();
         let embedder_state = app.state::<Embedder>();
 
-        // Greeting pre-step. Mirror `commands/chat.rs`:
-        //   a) due + pure-greeting utterance → skip the extra API call but
-        //      still mark greeted so we don't re-fire next turn.
-        //   b) due + real task → generate a contextual greeting.
-        // `mark_greeted` runs even on API failure to prevent per-turn retries.
-        if tracker_state.should_greet() {
-            if is_pure_greeting(&trimmed) {
-                tracker_state.mark_greeted();
-            } else {
-                tracker_state.mark_greeted();
-                let greeting_ctx = build_context(&mem_state, &embedder_state, &tracker_state, None);
-                let api_key = {
-                    let engine_state = app.state::<Mutex<AgentEngine>>();
-                    let engine = match engine_state.lock() {
-                        Ok(e) => e,
-                        Err(_) => return,
-                    };
-                    engine.api_key().to_string()
-                };
-                if !api_key.is_empty() {
-                    match generate_greeting(&api_key, &greeting_ctx).await {
-                        Ok(text) => {
-                            if let Ok(bus) = event_bus.lock() {
-                                bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
-                            }
-                            if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
-                                let _ = speech.speak_async(&text, &app);
-                            }
-                            // Small buffer so the greeting finishes spinning up
-                            // before the main response starts speaking.
-                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                        }
-                        Err(e) => eprintln!("[STT→Greet] greeting skipped: {e}"),
-                    }
-                }
+        // Greeting pre-step — shared with the chat path via `try_greet`.
+        // Voice differs only in how it speaks: `SpeechManager::speak_async`
+        // plus a 300 ms buffer so the greeting audio spins up before the
+        // main response starts talking.
+        let greeting_api_key = {
+            let engine_state = app.state::<Mutex<AgentEngine>>();
+            let engine = match engine_state.lock() {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            engine.api_key().to_string()
+        };
+        if let Some(text) = try_greet(
+            &greeting_api_key,
+            &trimmed,
+            &mem_state,
+            &embedder_state,
+            &tracker_state,
+            &event_bus,
+        )
+        .await
+        {
+            if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
+                let _ = speech.speak_async(&text, &app);
             }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
 
         tracker_state.mark_interaction();
@@ -346,17 +336,4 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
             }
         }
     });
-}
-
-fn is_pure_greeting(s: &str) -> bool {
-    let t = s.trim().to_lowercase();
-    if t.len() > 30 {
-        return false;
-    }
-    matches!(
-        t.as_str(),
-        "hi" | "hello" | "hey" | "jarvis" | "hi jarvis" | "hello jarvis"
-            | "hey jarvis" | "good morning" | "good afternoon" | "good evening"
-            | "are you there" | "are you there jarvis" | "jarvis are you there"
-    )
 }
