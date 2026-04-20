@@ -266,6 +266,26 @@ export default function App() {
     [addMessage, addActionEvent, addError, setStreaming, setExecutionMode]
   );
 
+  const handleJarvisGreeting = useCallback(
+    (payload: { text: string }) => {
+      uiLog('Voice', `jarvis-greeting: len=${payload.text.length}`);
+      const now = Date.now();
+      addMessage({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: payload.text,
+        timestamp: now,
+      });
+      addActionEvent({
+        id: crypto.randomUUID(),
+        type: 'JarvisGreeted',
+        description: payload.text.slice(0, 160),
+        timestamp: now,
+      });
+    },
+    [addMessage, addActionEvent]
+  );
+
   useTauriEvent('state-changed', handleStateChanged);
   useTauriEvent('voice-state-changed', handleVoiceStateChanged);
   useTauriEvent('error', handleError);
@@ -280,6 +300,7 @@ export default function App() {
   useTauriEvent('stt-error', handleSttError);
   useTauriEvent('voice-agent-response', handleVoiceAgentResponse);
   useTauriEvent('voice-agent-error', handleVoiceAgentError);
+  useTauriEvent('jarvis-greeting', handleJarvisGreeting);
 
   useTauriEvent('toggle-clap-from-tray', useCallback(() => {
     const { isListening, startClapDetection, stopClapDetection } = useVoiceStore.getState();
