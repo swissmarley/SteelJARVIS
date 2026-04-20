@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tracing::warn;
 
 use super::MemoryError;
 
@@ -16,7 +17,7 @@ pub(crate) fn encode_embedding(v: &[f32]) -> Vec<u8> {
 /// Decode an f32 vector from little-endian bytes. Returns `None` if the
 /// byte length isn't a multiple of 4.
 pub(crate) fn decode_embedding(bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
@@ -347,7 +348,7 @@ impl MemoryStore {
             let emb = match decode_embedding(&bytes) {
                 Some(v) => v,
                 None => {
-                    eprintln!(
+                    warn!(
                         "[semantic_search] skipping memory {} — malformed embedding blob ({} bytes)",
                         entry.id,
                         bytes.len()

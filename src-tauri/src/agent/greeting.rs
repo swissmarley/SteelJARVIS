@@ -11,6 +11,8 @@
 
 use std::sync::Mutex;
 
+use tracing::warn;
+
 use crate::agent::{build_context, generate_greeting};
 use crate::memory::{Embedder, MemoryStore};
 use crate::observability::{EventBus, JarvisEvent};
@@ -81,7 +83,7 @@ pub async fn try_greet(
             Some(text)
         }
         Err(e) => {
-            eprintln!("[Greet] greeting skipped: {e}");
+            warn!("[Greet] greeting skipped: {e}");
             None
         }
     }

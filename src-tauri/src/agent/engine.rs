@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::Mutex;
+use tracing::warn;
 
 use chrono::{DateTime, Local};
 
@@ -111,7 +112,7 @@ fn extract_name_from_profile(content: &str) -> Option<String> {
             let start = idx + marker.len();
             let tail = &content[start..];
             let name = tail
-                .split(|c: char| matches!(c, '.' | '!' | '?' | ',' | ';' | ':' | '\n'))
+                .split(['.', '!', '?', ',', ';', ':', '\n'])
                 .next()
                 .unwrap_or("")
                 .trim();
@@ -485,7 +486,7 @@ fn execute_tool(
             let embedding = match embedder.embed(query) {
                 Ok(v) => Some(v),
                 Err(e) => {
-                    eprintln!("[recall_memory] embedding failed, falling back to LIKE: {e}");
+                    warn!("[recall_memory] embedding failed, falling back to LIKE: {e}");
                     None
                 }
             };
