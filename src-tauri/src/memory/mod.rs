@@ -2,7 +2,6 @@ pub mod store;
 pub mod embedder;
 
 pub use store::{MemoryStore, MemoryEntry, MemoryCategory};
-#[allow(unused_imports)]
 pub use embedder::Embedder;
 
 #[derive(Debug, thiserror::Error)]
