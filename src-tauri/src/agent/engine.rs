@@ -31,6 +31,73 @@ impl Default for AgentContext {
     }
 }
 
+/// Build an AgentContext by resolving the user's name from memory and
+/// pulling top-K semantic matches (or pinned memories if no query is given).
+pub fn build_context(
+    store: &Mutex<MemoryStore>,
+    embedder: &Embedder,
+    tracker: &crate::session::SessionTracker,
+    query: Option<&str>,
+) -> AgentContext {
+    let now = Local::now();
+    let last_interaction = tracker.last_interaction();
+
+    let (user_name, memories) = match store.lock() {
+        Ok(guard) => {
+            // Name lookup: first Profile memory whose content contains "name is".
+            let user_name = guard
+                .list(Some(MemoryCategory::Profile), 20)
+                .unwrap_or_default()
+                .into_iter()
+                .find_map(|m| extract_name_from_profile(&m.content));
+
+            let memories = match query {
+                Some(q) => match embedder.embed(q) {
+                    Ok(q_emb) => guard
+                        .semantic_search(&q_emb, 6, 0.3)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|(e, _)| e)
+                        .collect(),
+                    Err(_) => guard.search(q, 6).unwrap_or_default(),
+                },
+                None => guard.list_pinned(5).unwrap_or_default(),
+            };
+
+            (user_name, memories)
+        }
+        Err(_) => (None, vec![]),
+    };
+
+    AgentContext {
+        now,
+        user_name,
+        last_interaction,
+        memories,
+    }
+}
+
+/// Extracts a name from a Profile memory like "User's name is Nakya" or
+/// "name: Nakya". Returns None when nothing plausible is found.
+fn extract_name_from_profile(content: &str) -> Option<String> {
+    let lower = content.to_lowercase();
+    for marker in ["name is ", "name: ", "i am ", "i'm "] {
+        if let Some(idx) = lower.find(marker) {
+            let start = idx + marker.len();
+            let tail = &content[start..];
+            let name = tail
+                .split(|c: char| !(c.is_alphabetic() || c == '-' || c == '\''))
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() && name.len() <= 40 {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClaudeMessage {
     pub role: String,
@@ -743,5 +810,22 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("User prefers espresso"));
         assert!(prompt.contains("[preferences]"));
+    }
+
+    #[test]
+    fn extract_name_handles_common_phrasings() {
+        assert_eq!(
+            extract_name_from_profile("User's name is Nakya."),
+            Some("Nakya".to_string())
+        );
+        assert_eq!(
+            extract_name_from_profile("name: Alex"),
+            Some("Alex".to_string())
+        );
+        assert_eq!(
+            extract_name_from_profile("I'm Jordan, a software engineer"),
+            Some("Jordan".to_string())
+        );
+        assert_eq!(extract_name_from_profile("Prefers espresso"), None);
     }
 }

@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use tauri::{AppHandle, Manager};
 
-use crate::agent::{AgentContext, AgentEngine};
-use crate::memory::{Embedder, MemoryStore};
+use crate::agent::AgentEngine;
 use crate::observability::{EventBus, JarvisEvent};
 use crate::voice::SpeechManager;
 
@@ -223,6 +222,46 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
     eprintln!("[STT→Agent] dispatching {:?} to agent", trimmed);
 
     tauri::async_runtime::spawn(async move {
+        use crate::agent::{build_context, generate_greeting};
+        use crate::memory::{Embedder, MemoryStore};
+        use crate::session::SessionTracker;
+
+        let tracker_state = app.state::<SessionTracker>();
+        let mem_state = app.state::<Mutex<MemoryStore>>();
+        let embedder_state = app.state::<Embedder>();
+
+        // Greeting pre-step
+        if tracker_state.should_greet() && !is_pure_greeting(&trimmed) {
+            let greeting_ctx = build_context(&*mem_state, &*embedder_state, &*tracker_state, None);
+            let (api_key,) = {
+                let engine_state = app.state::<Mutex<AgentEngine>>();
+                let engine = match engine_state.lock() {
+                    Ok(e) => e,
+                    Err(_) => return,
+                };
+                (engine.api_key().to_string(),)
+            };
+            if !api_key.is_empty() {
+                match generate_greeting(&api_key, &greeting_ctx).await {
+                    Ok(text) => {
+                        tracker_state.mark_greeted();
+                        if let Ok(bus) = event_bus.lock() {
+                            bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+                        }
+                        if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
+                            let _ = speech.speak_async(&text, &app);
+                        }
+                        // Small buffer so the greeting finishes spinning up before
+                        // the main response starts speaking.
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    }
+                    Err(e) => eprintln!("[STT→Greet] greeting skipped: {e}"),
+                }
+            }
+        }
+
+        tracker_state.mark_interaction();
+
         let (api_key, history) = {
             let engine_state = app.state::<Mutex<AgentEngine>>();
             let engine = match engine_state.lock() {
@@ -254,10 +293,8 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
             }
         };
 
-        // TODO(Task 10): replace with build_context(...) once memory + session plumbing lands.
-        let ctx = AgentContext::default();
-        let mem_state = app.state::<Mutex<MemoryStore>>();
-        let embedder_state = app.state::<Embedder>();
+        let ctx = build_context(&*mem_state, &*embedder_state, &*tracker_state, Some(&trimmed));
+
         let result = AgentEngine::send_with(
             &api_key,
             &history,
@@ -284,8 +321,6 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
                     });
                 }
 
-                // Speak the response so JARVIS answers even if the UI is hidden.
-                // speak_async mutes STT for the duration to prevent self-hearing.
                 if let Ok(speech) = app.state::<Mutex<SpeechManager>>().lock() {
                     if let Err(e) = speech.speak_async(&response, &app) {
                         eprintln!("[STT→Agent] TTS failed: {}", e);
@@ -303,4 +338,17 @@ fn dispatch_to_agent(app: AppHandle, event_bus: Arc<Mutex<EventBus>>, user_text:
             }
         }
     });
+}
+
+fn is_pure_greeting(s: &str) -> bool {
+    let t = s.trim().to_lowercase();
+    if t.len() > 30 {
+        return false;
+    }
+    matches!(
+        t.as_str(),
+        "hi" | "hello" | "hey" | "jarvis" | "hi jarvis" | "hello jarvis"
+            | "hey jarvis" | "good morning" | "good afternoon" | "good evening"
+            | "are you there" | "are you there jarvis" | "jarvis are you there"
+    )
 }

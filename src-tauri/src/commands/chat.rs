@@ -1,34 +1,59 @@
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{AgentContext, AgentEngine};
+use crate::agent::{build_context, generate_greeting, AgentEngine};
 use crate::memory::{Embedder, MemoryStore};
-use crate::observability::EventBus;
+use crate::observability::{EventBus, JarvisEvent};
+use crate::session::SessionTracker;
 
 #[tauri::command]
 pub async fn send_message(
     message: String,
+    app: AppHandle,
     engine: State<'_, Mutex<AgentEngine>>,
     mem_store: State<'_, Mutex<MemoryStore>>,
     embedder: State<'_, Embedder>,
+    tracker: State<'_, SessionTracker>,
     event_bus: State<'_, Arc<Mutex<EventBus>>>,
 ) -> Result<String, String> {
     eprintln!("[Chat] send_message invoked, text={:?}", message);
+
+    // Greeting pre-step (if due and the message isn't itself a pure greeting).
+    if tracker.should_greet() && !is_pure_greeting(&message) {
+        let greeting_ctx = build_context(&*mem_store, &*embedder, &*tracker, None);
+        let api_key = {
+            let e = engine.lock().map_err(|e| e.to_string())?;
+            e.api_key().to_string()
+        };
+        if !api_key.is_empty() {
+            match generate_greeting(&api_key, &greeting_ctx).await {
+                Ok(text) => {
+                    tracker.mark_greeted();
+                    if let Ok(bus) = event_bus.lock() {
+                        bus.emit(JarvisEvent::JarvisGreeting { text: text.clone() });
+                    }
+                    // Speak the greeting too so behavior matches voice path.
+                    let _ = app.emit("jarvis-greeting-speak", text);
+                }
+                Err(e) => eprintln!("[Chat] greeting skipped: {e}"),
+            }
+        }
+    }
+
+    tracker.mark_interaction();
+
     let (api_key, history) = {
         let e = engine.lock().map_err(|e| e.to_string())?;
         (e.api_key().to_string(), e.history().to_vec())
     };
 
     if api_key.is_empty() {
-        eprintln!("[Chat] ERROR: ANTHROPIC_API_KEY is not configured");
         return Err("ANTHROPIC_API_KEY is not configured. Add it to .env or the environment and restart.".to_string());
     }
-    eprintln!("[Chat] api_key len={}, history len={}", api_key.len(), history.len());
 
+    let ctx = build_context(&*mem_store, &*embedder, &*tracker, Some(&message));
     let bus = event_bus.lock().map_err(|e| e.to_string())?.clone();
 
-    // TODO(Task 10): replace with build_context(...) once memory + session plumbing lands.
-    let ctx = AgentContext::default();
     let result = AgentEngine::send_with(
         &api_key,
         &history,
@@ -39,10 +64,6 @@ pub async fn send_message(
         &bus,
     )
     .await;
-    match &result {
-        Ok((response, _)) => eprintln!("[Chat] agent response ({} chars)", response.len()),
-        Err(e) => eprintln!("[Chat] agent error: {}", e),
-    }
     let (response, new_messages) = result?;
 
     {
@@ -51,6 +72,20 @@ pub async fn send_message(
     }
 
     Ok(response)
+}
+
+/// Simple heuristic: is this just a hello-style utterance with no task?
+fn is_pure_greeting(s: &str) -> bool {
+    let t = s.trim().to_lowercase();
+    if t.len() > 30 {
+        return false;
+    }
+    matches!(
+        t.as_str(),
+        "hi" | "hello" | "hey" | "jarvis" | "hi jarvis" | "hello jarvis"
+            | "hey jarvis" | "good morning" | "good afternoon" | "good evening"
+            | "are you there" | "are you there jarvis" | "jarvis are you there"
+    )
 }
 
 #[tauri::command]
